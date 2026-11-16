@@ -149,3 +149,234 @@ fn item_dto(entry: fluxdown_engine::dht_radar::store::TorrentEntry) -> DhtRadarI
         magnet,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use fluxdown_engine::dht_radar::store::MetadataSummary;
+    use fluxdown_engine::dht_radar::{Radar, RadarConfig};
+    use fluxdown_protocol::{
+        ApplicationErrorCode, DhtRadarConfigDto, DhtRadarListDto, DhtRadarStatsDto, method,
+    };
+    use serde_json::{Value, json};
+
+    use super::super::DaemonService;
+
+    struct Fixture {
+        service: DaemonService,
+        radar: Arc<Radar>,
+        dir: std::path::PathBuf,
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            if let Err(error) = std::fs::remove_dir_all(&self.dir) {
+                eprintln!("dht radar rpc test dir removal failed: {error}");
+            }
+        }
+    }
+
+    async fn fixture(wired: bool) -> Fixture {
+        let dir = std::env::temp_dir().join(format!("fluxdown_dht_radar_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).expect("test dir");
+        let db = fluxdown_engine::db::Db::connect("sqlite::memory:")
+            .await
+            .expect("memory db");
+        let events =
+            crate::event_hub::DaemonEventHub::new(fluxdown_protocol::DaemonSnapshot::default(), 64);
+        let selections = crate::selection::DaemonSelection::new(events.clone());
+        let blobs = Arc::new(
+            crate::blob_store::BlobStore::open(dir.join("blobs"))
+                .await
+                .expect("blob store"),
+        );
+        let radar = Radar::new(RadarConfig {
+            enabled: false,
+            port: 0,
+            capacity: 64,
+            metadata: false,
+            nodes: 1,
+        });
+        let service = DaemonService::new(
+            crate::service_hello("dht-radar-rpc-test", Vec::new()),
+            events,
+            selections,
+            blobs,
+            crate::actor::DaemonActorHandle::disconnected(),
+            db,
+            dir.clone(),
+            #[cfg(feature = "plugins")]
+            None,
+        );
+        let service = if wired {
+            service.with_dht_radar(Arc::clone(&radar))
+        } else {
+            service
+        };
+        Fixture {
+            service,
+            radar,
+            dir,
+        }
+    }
+
+    async fn call(
+        fx: &Fixture,
+        name: &str,
+        params: Option<Value>,
+    ) -> Result<Value, fluxdown_protocol::RpcErrorObject> {
+        fx.service
+            .call_inner("dht-radar-rpc-test", false, name, params)
+            .await
+    }
+
+    fn code(error: &fluxdown_protocol::RpcErrorObject) -> ApplicationErrorCode {
+        error
+            .data
+            .as_ref()
+            .map(|data| data.code)
+            .expect("error code")
+    }
+
+    #[tokio::test]
+    async fn unwired_service_answers_unavailable() {
+        let fx = fixture(false).await;
+        let error = call(&fx, method::DAEMON_DHT_RADAR_LIST, None)
+            .await
+            .expect_err("must be unavailable");
+        assert_eq!(code(&error), ApplicationErrorCode::Unavailable);
+        let error = call(&fx, method::DAEMON_DHT_RADAR_CONFIG, None)
+            .await
+            .expect_err("must be unavailable");
+        assert_eq!(code(&error), ApplicationErrorCode::Unavailable);
+    }
+
+    #[tokio::test]
+    async fn config_defaults_and_patch_are_persisted() {
+        let fx = fixture(true).await;
+        let config: DhtRadarConfigDto = serde_json::from_value(
+            call(&fx, method::DAEMON_DHT_RADAR_CONFIG, None)
+                .await
+                .expect("config"),
+        )
+        .expect("config dto");
+        assert!(!config.enabled);
+        assert!(!config.metadata);
+        assert_eq!(config.capacity, 64);
+        assert_eq!(config.nodes, 1);
+
+        // 只改端口与容量：不启动采集，避免测试里发真实 UDP。
+        let patched: DhtRadarConfigDto = serde_json::from_value(
+            call(
+                &fx,
+                method::DAEMON_DHT_RADAR_CONFIG_SET,
+                Some(json!({ "port": 0, "capacity": 128, "nodes": 2 })),
+            )
+            .await
+            .expect("config set"),
+        )
+        .expect("config dto");
+        assert_eq!(patched.capacity, 128);
+        assert_eq!(patched.nodes, 2);
+        assert!(!patched.enabled);
+        assert!(!fx.radar.is_running());
+
+        // 配置写回了 daemon 配置表。
+        assert_eq!(
+            fx.service
+                .db
+                .get_config("dht_radar_capacity")
+                .await
+                .expect("read config")
+                .as_deref(),
+            Some("128")
+        );
+        assert_eq!(
+            fx.service
+                .db
+                .get_config("dht_radar_nodes")
+                .await
+                .expect("read config")
+                .as_deref(),
+            Some("2")
+        );
+    }
+
+    #[tokio::test]
+    async fn stats_report_running_state_and_store_totals() {
+        let fx = fixture(true).await;
+        fx.radar
+            .store()
+            .observe([7u8; 20], Some("1.2.3.4:6881".parse().expect("addr")), 100);
+        let stats: DhtRadarStatsDto = serde_json::from_value(
+            call(&fx, method::DAEMON_DHT_RADAR_STATS, None)
+                .await
+                .expect("stats"),
+        )
+        .expect("stats dto");
+        assert!(!stats.running);
+        assert_eq!(stats.torrents, 1);
+        assert_eq!(stats.with_metadata, 0);
+        assert_eq!(stats.instances, 1);
+    }
+
+    #[tokio::test]
+    async fn list_maps_entries_to_dto_with_magnet() {
+        let fx = fixture(true).await;
+        let store = fx.radar.store();
+        store.observe(
+            [0xabu8; 20],
+            Some("1.2.3.4:6881".parse().expect("addr")),
+            100,
+        );
+        store.begin_metadata([0xabu8; 20]);
+        store.set_metadata(
+            [0xabu8; 20],
+            MetadataSummary {
+                name: Some("debian.iso".to_owned()),
+                total_size: Some(1024),
+                file_count: Some(1),
+            },
+        );
+        store.observe([0xcdu8; 20], None, 200);
+
+        let page: DhtRadarListDto = serde_json::from_value(
+            call(
+                &fx,
+                method::DAEMON_DHT_RADAR_LIST,
+                Some(json!({ "sort": "recent", "limit": 10 })),
+            )
+            .await
+            .expect("list"),
+        )
+        .expect("list dto");
+        assert_eq!(page.total, 2);
+        assert_eq!(page.items.len(), 2);
+        // 最近观测的排在前面。
+        assert_eq!(page.items[0].info_hash, "cd".repeat(20));
+        assert!(!page.items[0].has_metadata);
+        let debian = &page.items[1];
+        assert_eq!(debian.name.as_deref(), Some("debian.iso"));
+        assert_eq!(debian.total_size, Some(1024));
+        assert!(debian.has_metadata);
+        assert_eq!(
+            debian.magnet,
+            format!("magnet:?xt=urn:btih:{}", "ab".repeat(20))
+        );
+
+        // 关键字只匹配名称与 infohash 前缀。
+        let filtered: DhtRadarListDto = serde_json::from_value(
+            call(
+                &fx,
+                method::DAEMON_DHT_RADAR_LIST,
+                Some(json!({ "query": "deb" })),
+            )
+            .await
+            .expect("list"),
+        )
+        .expect("list dto");
+        assert_eq!(filtered.total, 1);
+        assert_eq!(filtered.items[0].name.as_deref(), Some("debian.iso"));
+    }
+}
