@@ -243,7 +243,10 @@ fn commands(labels: &Labels, cx: &App) -> Vec<PaletteItem> {
     for entry in ActivityEntry::ALL {
         let label_key = entry.label_key();
         match entry {
-            ActivityEntry::Downloads | ActivityEntry::Rss | ActivityEntry::Webhooks => {
+            ActivityEntry::Downloads
+            | ActivityEntry::Rss
+            | ActivityEntry::Webhooks
+            | ActivityEntry::DhtRadar => {
                 let Some(route) = entry.route() else {
                     continue;
                 };
@@ -258,11 +261,13 @@ fn commands(labels: &Labels, cx: &App) -> Vec<PaletteItem> {
                 let id: &'static str = match entry {
                     ActivityEntry::Downloads => "cmd.go_downloads",
                     ActivityEntry::Rss => "cmd.go_rss",
+                    ActivityEntry::DhtRadar => "cmd.go_dht_radar",
                     _ => "cmd.go_webhooks",
                 };
                 let icon = match entry {
                     ActivityEntry::Downloads => FluxIcon::Download,
                     ActivityEntry::Rss => FluxIcon::Rss,
+                    ActivityEntry::DhtRadar => FluxIcon::Globe,
                     _ => FluxIcon::Webhook,
                 };
                 let page = labels.current.text(label_key);

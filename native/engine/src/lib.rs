@@ -51,6 +51,8 @@ pub(crate) mod credential_scope;
 pub mod dash_downloader;
 pub mod data_dir;
 pub mod db;
+/// DHT 种子雷达：被动采集 Mainline DHT 上的 infohash 并聚合（BEP 5 / BEP 9）。
+pub mod dht_radar;
 pub mod disk_space;
 pub mod download_manager;
 pub mod downloader;

@@ -235,6 +235,14 @@ pub const DAEMON_BT_GUARD_CLOUD_REFRESH: &str = "daemon.bt.guard.cloud.refresh";
 pub const DAEMON_BT_GUARD_CLOUD_APPLY: &str = "daemon.bt.guard.cloud.apply";
 /// 仅 agent 调用：弹出待上报证据（`BtGuardEvidenceDrainDto`）。
 pub const DAEMON_BT_GUARD_EVIDENCE_DRAIN: &str = "daemon.bt.guard.evidence.drain";
+/// DHT 种子雷达：列表查询（`DhtRadarListParams` → `DhtRadarListDto`）。
+pub const DAEMON_DHT_RADAR_LIST: &str = "daemon.dht.radar.list";
+/// DHT 种子雷达：采集统计（无参 → `DhtRadarStatsDto`）。
+pub const DAEMON_DHT_RADAR_STATS: &str = "daemon.dht.radar.stats";
+/// DHT 种子雷达：当前配置（无参 → `DhtRadarConfigDto`）。
+pub const DAEMON_DHT_RADAR_CONFIG: &str = "daemon.dht.radar.config";
+/// DHT 种子雷达：修改配置 / 开关采集（`DhtRadarSetConfigParams` → `DhtRadarConfigDto`）。
+pub const DAEMON_DHT_RADAR_CONFIG_SET: &str = "daemon.dht.radar.config.set";
 pub const DAEMON_ED2K_SERVER_SUBSCRIPTION_REFRESH: &str = "daemon.ed2k.serverSubscription.refresh";
 /// 立即刷新 Kad 节点（nodes.dat）订阅（无参 → `Ed2kNodesSubRefreshResponse`）。慢方法：会拉取网络。
 pub const DAEMON_ED2K_NODES_SUBSCRIPTION_REFRESH: &str = "daemon.ed2k.nodesSubscription.refresh";
@@ -596,6 +604,10 @@ pub const ALL_METHODS: &[&str] = &[
     DAEMON_BT_GUARD_CLOUD_REFRESH,
     DAEMON_BT_GUARD_CLOUD_APPLY,
     DAEMON_BT_GUARD_EVIDENCE_DRAIN,
+    DAEMON_DHT_RADAR_LIST,
+    DAEMON_DHT_RADAR_STATS,
+    DAEMON_DHT_RADAR_CONFIG,
+    DAEMON_DHT_RADAR_CONFIG_SET,
     DAEMON_BT_TRACKER_SUBSCRIPTION_REFRESH,
     DAEMON_BT_PORT_STATUS,
     DAEMON_ED2K_SERVER_SUBSCRIPTION_REFRESH,

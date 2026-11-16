@@ -94,6 +94,8 @@ pub struct DaemonService {
     /// BT 防吸血宿主（`daemon.bt.guard.*`）；未接线时这些方法答 `unavailable`。
     #[cfg(feature = "bt")]
     bt_guard: Option<Arc<fluxdown_engine::bt_guard::BtGuardHost>>,
+    /// DHT 种子雷达（`daemon.dht.radar.*`）；未接线时这些方法答 `unavailable`。
+    dht_radar: Option<Arc<fluxdown_engine::dht_radar::Radar>>,
 }
 
 impl DaemonService {
@@ -138,6 +140,7 @@ impl DaemonService {
             demo_url: None,
             #[cfg(feature = "bt")]
             bt_guard: None,
+            dht_radar: None,
         }
     }
 
@@ -153,6 +156,13 @@ impl DaemonService {
     #[must_use]
     pub fn with_bt_guard(mut self, bt_guard: Arc<fluxdown_engine::bt_guard::BtGuardHost>) -> Self {
         self.bt_guard = Some(bt_guard);
+        self
+    }
+
+    /// 接入 DHT 种子雷达（`daemon.dht.radar.*` 的数据面）。
+    #[must_use]
+    pub fn with_dht_radar(mut self, dht_radar: Arc<fluxdown_engine::dht_radar::Radar>) -> Self {
+        self.dht_radar = Some(dht_radar);
         self
     }
 
@@ -1631,6 +1641,10 @@ impl DaemonService {
             | method::DAEMON_BT_GUARD_EVIDENCE_DRAIN => Err(unsupported_error(
                 "daemon was built without BitTorrent support",
             )),
+            method::DAEMON_DHT_RADAR_LIST
+            | method::DAEMON_DHT_RADAR_STATS
+            | method::DAEMON_DHT_RADAR_CONFIG
+            | method::DAEMON_DHT_RADAR_CONFIG_SET => self.dht_radar_call(method_name, params).await,
             method::DAEMON_BT_TRACKER_SUBSCRIPTION_REFRESH => {
                 match self
                     .actor
@@ -3035,6 +3049,10 @@ mod plugin_host_rpc;
 #[cfg(feature = "bt")]
 #[path = "bt_guard_rpc.rs"]
 mod bt_guard_rpc;
+
+/// DHT 种子雷达 RPC（`daemon.dht.radar.*`）。同样作为子模块编译。
+#[path = "dht_radar_rpc.rs"]
+mod dht_radar_rpc;
 
 #[cfg(test)]
 mod tests {

@@ -296,6 +296,33 @@ pub async fn run_with(
         }
     });
 
+    // DHT 种子雷达：配置来自 daemon 配置表，默认关闭（开启后会监听 UDP 并向公网 DHT 发包）。
+    let dht_radar = {
+        let config = fluxdown_engine::dht_radar::RadarConfig {
+            enabled: config_enabled(&all_config, "dht_radar_enabled", false),
+            port: all_config
+                .get("dht_radar_port")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(fluxdown_engine::dht_radar::DEFAULT_PORT),
+            capacity: all_config
+                .get("dht_radar_capacity")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(fluxdown_engine::dht_radar::DEFAULT_CAPACITY),
+            metadata: config_enabled(&all_config, "dht_radar_metadata", true),
+            nodes: all_config
+                .get("dht_radar_nodes")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(fluxdown_engine::dht_radar::DEFAULT_NODES),
+        };
+        let radar = fluxdown_engine::dht_radar::Radar::new(config);
+        if config.enabled
+            && let Err(error) = radar.start()
+        {
+            tracing::warn!(%error, "dht radar failed to start");
+        }
+        radar
+    };
+
     let token =
         load_or_create_token(&data_dir, process_config.token_file_override.as_deref()).await?;
     let blobs = Arc::new(BlobStore::open(data_dir.join("daemon-blobs")).await?);
@@ -311,7 +338,8 @@ pub async fn run_with(
         #[cfg(feature = "plugins")]
         service_plugin_manager,
     )
-    .with_demo_url(process_config.demo_url.clone());
+    .with_demo_url(process_config.demo_url.clone())
+    .with_dht_radar(dht_radar);
     #[cfg(feature = "bt")]
     let service = service.with_bt_guard(service_bt_guard);
     let service = Arc::new(service);

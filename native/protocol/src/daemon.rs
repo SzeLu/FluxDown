@@ -4521,3 +4521,135 @@ pub struct WebhookSimulateResponse {
     /// 前端该直说而不是干等投递记录。
     pub dispatched: i32,
 }
+
+// ---------------------------------------------------------------- DHT 种子雷达
+
+/// `daemon.dht.radar.list` 参数。
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DhtRadarListParams {
+    /// 关键字：匹配种子名（不区分大小写）或 infohash 前缀。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    /// `recent`（默认）/ `peers` / `size`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<String>,
+    #[serde(default)]
+    pub offset: u32,
+    #[serde(default = "default_radar_limit")]
+    pub limit: u32,
+}
+
+fn default_radar_limit() -> u32 {
+    100
+}
+
+/// 雷达列表中的一条种子。
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DhtRadarItemDto {
+    /// 40 位小写十六进制 infohash。
+    pub info_hash: String,
+    /// 种子名（拿到元数据后才有）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// 总字节数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_size: Option<u64>,
+    /// 文件数。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_count: Option<u32>,
+    /// 观测到的 peer 数。
+    pub peers: u32,
+    /// 首次观测时间（Unix 秒）。
+    pub first_seen: i64,
+    /// 最近观测时间（Unix 秒）。
+    pub last_seen: i64,
+    /// 是否已有元数据。
+    pub has_metadata: bool,
+    /// 可直接交给下载引擎的磁力链接。
+    pub magnet: String,
+}
+
+/// `daemon.dht.radar.list` 结果。
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DhtRadarListDto {
+    /// 匹配到的总数（不受分页限制）。
+    pub total: u64,
+    pub items: Vec<DhtRadarItemDto>,
+}
+
+/// `daemon.dht.radar.stats` 结果。
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DhtRadarStatsDto {
+    /// 采集是否在跑。
+    pub running: bool,
+    /// 实际监听端口。
+    pub port: u16,
+    /// 收到的报文数。
+    pub packets_received: u64,
+    /// 发出的报文数。
+    pub packets_sent: u64,
+    /// 收到的查询数。
+    pub queries: u64,
+    /// 收到的应答数。
+    pub responses: u64,
+    /// 节点表大小（全部虚拟节点之和）。
+    pub nodes: u64,
+    /// 正在运行的虚拟节点数。
+    pub instances: u32,
+    /// 观测到的 infohash 总数（含被淘汰的）。
+    pub infohashes: u64,
+    /// 记录到的 peer 次数。
+    pub peers: u64,
+    /// 元数据抓取成功数。
+    pub metadata_ok: u64,
+    /// 元数据抓取失败数。
+    pub metadata_failed: u64,
+    /// 最近一次收到报文的 Unix 时间；0 = 还没收到过。
+    pub last_packet: i64,
+    /// 当前保留的种子数。
+    pub torrents: u64,
+    /// 其中已有元数据的数量。
+    pub with_metadata: u64,
+}
+
+/// 雷达配置。
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DhtRadarConfigDto {
+    /// 是否开启采集。
+    pub enabled: bool,
+    /// UDP 监听端口；0 = 系统分配。
+    pub port: u16,
+    /// 保留条数上限。
+    pub capacity: u32,
+    /// 是否抓取元数据。
+    pub metadata: bool,
+    /// 虚拟节点数。
+    pub nodes: u32,
+}
+
+/// `daemon.dht.radar.config.set` 参数；只提交需要修改的字段。
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DhtRadarSetConfigParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nodes: Option<u32>,
+}

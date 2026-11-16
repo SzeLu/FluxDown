@@ -17,9 +17,11 @@ use crate::app::Desktop;
 const DOWNLOADS_ID: &str = "downloads";
 const RSS_ID: &str = "rss";
 const WEBHOOKS_ID: &str = "webhooks";
+const DHT_RADAR_ID: &str = "dhtRadar";
 pub(crate) const DOWNLOADS_ROUTE: RouteId = RouteId::new(DOWNLOADS_ID);
 pub(crate) const RSS_ROUTE: RouteId = RouteId::new(RSS_ID);
 pub(crate) const WEBHOOKS_ROUTE: RouteId = RouteId::new(WEBHOOKS_ID);
+pub(crate) const DHT_RADAR_ROUTE: RouteId = RouteId::new(DHT_RADAR_ID);
 
 /// 活动栏条目，按自上而下顺序（路由在上，动作在下）。
 ///
@@ -30,15 +32,17 @@ pub(crate) enum ActivityEntry {
     Downloads,
     Rss,
     Webhooks,
+    DhtRadar,
     Account,
     Settings,
 }
 
 impl ActivityEntry {
-    pub(crate) const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::Downloads,
         Self::Rss,
         Self::Webhooks,
+        Self::DhtRadar,
         Self::Account,
         Self::Settings,
     ];
@@ -49,6 +53,7 @@ impl ActivityEntry {
             Self::Downloads => "activity-downloads",
             Self::Rss => "activity-rss",
             Self::Webhooks => "activity-webhooks",
+            Self::DhtRadar => "activity-dht-radar",
             Self::Account => "activity-account",
             Self::Settings => "activity-settings",
         }
@@ -60,6 +65,7 @@ impl ActivityEntry {
             Self::Downloads => DOWNLOADS_ID,
             Self::Rss => RSS_ID,
             Self::Webhooks => WEBHOOKS_ID,
+            Self::DhtRadar => DHT_RADAR_ID,
             Self::Account => "account",
             Self::Settings => "settings",
         }
@@ -71,6 +77,7 @@ impl ActivityEntry {
             Self::Downloads => fluxdown_ui_i18n::keys::MOBILE_NAV_DOWNLOADS,
             Self::Rss => "sidebarRss",
             Self::Webhooks => "pushNavTitle",
+            Self::DhtRadar => "dhtRadarTitle",
             Self::Account => "settingsCatAccount",
             Self::Settings => fluxdown_ui_i18n::keys::SETTINGS,
         }
@@ -82,6 +89,7 @@ impl ActivityEntry {
             Self::Downloads => Some(DOWNLOADS_ROUTE),
             Self::Rss => Some(RSS_ROUTE),
             Self::Webhooks => Some(WEBHOOKS_ROUTE),
+            Self::DhtRadar => Some(DHT_RADAR_ROUTE),
             Self::Account | Self::Settings => None,
         }
     }
@@ -99,6 +107,11 @@ impl ActivityEntry {
                 pref_key: "ui.show_activity_webhooks",
                 title_key: "showActivityWebhooks",
                 desc_key: "showActivityWebhooksDesc",
+            }),
+            Self::DhtRadar => Some(ActivityBarToggle {
+                pref_key: "ui.show_activity_dht_radar",
+                title_key: "showActivityDhtRadar",
+                desc_key: "showActivityDhtRadarDesc",
             }),
             Self::Account => Some(ActivityBarToggle {
                 pref_key: "ui.show_activity_account",

@@ -67,6 +67,15 @@ fn open_with(cx: &mut App, focus: bool) -> Option<WindowHandle<Root>> {
                 cx,
             )
         });
+        let dht_radar_client = crate::windows::dht_radar::client(cx);
+        let dht_radar_translator = translator.read(cx).clone();
+        let dht_radar = cx.new(|cx| {
+            crate::windows::dht_radar::DhtRadarView::new(
+                dht_radar_translator.clone(),
+                dht_radar_client.clone(),
+                cx,
+            )
+        });
         let downloads_title_bar = downloads.update(cx, |downloads, cx| downloads.new_title_bar(cx));
 
         let downloads_sidebar = downloads.read(cx).sidebar_state();
@@ -111,6 +120,17 @@ fn open_with(cx: &mut App, focus: bool) -> Option<WindowHandle<Root>> {
                         entry.label_key(),
                         Icon::new(FluxIcon::Webhook),
                         push.clone().into(),
+                    )
+                    .optional(optional),
+                ),
+                ActivityEntry::DhtRadar => routes.push(
+                    ShellRoute::new(
+                        crate::activity::DHT_RADAR_ROUTE,
+                        button_id,
+                        "activity-dht-radar-tooltip",
+                        entry.label_key(),
+                        Icon::new(FluxIcon::Globe),
+                        dht_radar.clone().into(),
                     )
                     .optional(optional),
                 ),

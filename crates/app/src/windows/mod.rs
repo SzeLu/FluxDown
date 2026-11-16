@@ -23,6 +23,7 @@ use crate::{agent_client::AgentClient, app::Desktop};
 mod bounds;
 pub use bounds::RememberedWindow;
 
+pub mod dht_radar;
 pub mod file_conflict;
 pub mod group_detail;
 pub mod main;

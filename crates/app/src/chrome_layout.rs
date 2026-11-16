@@ -26,9 +26,10 @@ pub(crate) const CHROME_LAYOUT_PREF: &str = "ui.chrome_layout";
 pub(crate) fn catalog() -> Vec<ChromeItemSpec> {
     let activity = ActivityEntry::ALL.into_iter().map(|entry| {
         let (zone, families) = match entry {
-            ActivityEntry::Downloads | ActivityEntry::Rss | ActivityEntry::Webhooks => {
-                (ChromeZone::RailTop, ChromeFamilies::ALL)
-            }
+            ActivityEntry::Downloads
+            | ActivityEntry::Rss
+            | ActivityEntry::Webhooks
+            | ActivityEntry::DhtRadar => (ChromeZone::RailTop, ChromeFamilies::ALL),
             // 账户头像是固定 32px 的自绘视图，高于状态栏。
             ActivityEntry::Account => (ChromeZone::RailBottom, ChromeFamilies::RAIL_TITLE),
             ActivityEntry::Settings => (ChromeZone::RailBottom, ChromeFamilies::ALL),
@@ -36,7 +37,10 @@ pub(crate) fn catalog() -> Vec<ChromeItemSpec> {
         let spec = ChromeItemSpec::new(entry.layout_id(), zone, families);
         match entry {
             ActivityEntry::Downloads | ActivityEntry::Settings => spec.fixed(),
-            ActivityEntry::Rss | ActivityEntry::Webhooks | ActivityEntry::Account => spec,
+            ActivityEntry::Rss
+            | ActivityEntry::Webhooks
+            | ActivityEntry::DhtRadar
+            | ActivityEntry::Account => spec,
         }
     });
     let widgets = DownloadWidget::ALL.into_iter().map(|widget| {
