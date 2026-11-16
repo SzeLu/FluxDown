@@ -256,6 +256,11 @@ pub const DAEMON_DHT_RADAR_CONFIG: &str = "daemon.dht.radar.config";
 pub const DAEMON_DHT_RADAR_CONFIG_SET: &str = "daemon.dht.radar.config.set";
 /// DHT 种子雷达：清空已保存的存档（无参 → `DhtRadarClearDto`）。
 pub const DAEMON_DHT_RADAR_CLEAR: &str = "daemon.dht.radar.clear";
+/// DHT 种子雷达：导出全部已保存存档（无参 → `DhtRadarExportDto`）。慢方法：可达数万条。
+pub const DAEMON_DHT_RADAR_EXPORT: &str = "daemon.dht.radar.export";
+/// DHT 种子雷达：导入存档并按 infohash 去重（`DhtRadarImportParams` → `DhtRadarImportDto`）。
+/// 慢方法：可能一次写入大量行。
+pub const DAEMON_DHT_RADAR_IMPORT: &str = "daemon.dht.radar.import";
 pub const DAEMON_ED2K_SERVER_SUBSCRIPTION_REFRESH: &str = "daemon.ed2k.serverSubscription.refresh";
 /// 立即刷新 Kad 节点（nodes.dat）订阅（无参 → `Ed2kNodesSubRefreshResponse`）。慢方法：会拉取网络。
 pub const DAEMON_ED2K_NODES_SUBSCRIPTION_REFRESH: &str = "daemon.ed2k.nodesSubscription.refresh";
@@ -629,6 +634,8 @@ pub const ALL_METHODS: &[&str] = &[
     DAEMON_DHT_RADAR_CONFIG,
     DAEMON_DHT_RADAR_CONFIG_SET,
     DAEMON_DHT_RADAR_CLEAR,
+    DAEMON_DHT_RADAR_EXPORT,
+    DAEMON_DHT_RADAR_IMPORT,
     DAEMON_BT_TRACKER_SUBSCRIPTION_REFRESH,
     DAEMON_BT_PORT_STATUS,
     DAEMON_ED2K_SERVER_SUBSCRIPTION_REFRESH,
@@ -784,6 +791,8 @@ pub const SLOW_DAEMON_METHODS: &[&str] = &[
     DAEMON_ED2K_ID_CHECK,
     DAEMON_ED2K_KAD_BOOTSTRAP,
     DAEMON_BT_GUARD_EXPORT,
+    DAEMON_DHT_RADAR_EXPORT,
+    DAEMON_DHT_RADAR_IMPORT,
     DAEMON_BT_GUARD_FILTER_SOURCES_REFRESH,
     DAEMON_BT_GUARD_CLOUD_APPLY,
     DAEMON_FS_LIST,

@@ -3,16 +3,19 @@
 //! 雷达本身跑在引擎侧的独立线程里（UDP 采集 + 元数据抓取），这里只做参数解析、DTO 映射与
 //! 配置持久化。列表查询是纯内存操作，不需要经过 actor。
 
+use fluxdown_engine::dht_radar::archive::{encode_export, parse_import};
 use fluxdown_engine::dht_radar::store::Sort;
 use fluxdown_engine::dht_radar::{RadarConfig, RadarSnapshot};
 use fluxdown_protocol::{
-    ApplicationErrorCode, DhtRadarClearDto, DhtRadarConfigDto, DhtRadarItemDto, DhtRadarListDto,
-    DhtRadarListParams, DhtRadarSetConfigParams, DhtRadarStatsDto, RpcErrorData, RpcErrorObject,
-    method,
+    ApplicationErrorCode, DhtRadarClearDto, DhtRadarConfigDto, DhtRadarExportDto,
+    DhtRadarImportDto, DhtRadarImportParams, DhtRadarItemDto, DhtRadarListDto, DhtRadarListParams,
+    DhtRadarSetConfigParams, DhtRadarStatsDto, RpcErrorData, RpcErrorObject, method,
 };
 use serde_json::Value;
 
-use super::{DaemonService, internal_error, parse_optional_params, to_value};
+use super::{
+    DaemonService, internal_error, invalid_argument, parse_optional_params, parse_params, to_value,
+};
 
 /// 配置持久化键（与 daemon 配置表共用命名空间）。
 const KEY_ENABLED: &str = "dht_radar_enabled";
@@ -20,9 +23,12 @@ const KEY_PORT: &str = "dht_radar_port";
 const KEY_CAPACITY: &str = "dht_radar_capacity";
 const KEY_METADATA: &str = "dht_radar_metadata";
 const KEY_NODES: &str = "dht_radar_nodes";
+const KEY_ARCHIVE_THRESHOLD: &str = "dht_radar_archive_threshold";
 
 /// 单页上限，避免一次拉爆 UI。
 const MAX_LIMIT: u32 = 500;
+/// 单次导入的文本上限：客户端已按 16 MiB 读盘，这里再兜一层。
+const MAX_IMPORT_BYTES: usize = 16 * 1024 * 1024;
 
 fn unavailable() -> RpcErrorObject {
     RpcErrorObject::application(
@@ -38,6 +44,7 @@ fn config_dto(config: RadarConfig) -> DhtRadarConfigDto {
         capacity: u32::try_from(config.capacity).unwrap_or(u32::MAX),
         metadata: config.metadata,
         nodes: u32::try_from(config.nodes).unwrap_or(u32::MAX),
+        archive_threshold: u32::try_from(config.archive_threshold).unwrap_or(u32::MAX),
     }
 }
 
@@ -104,10 +111,15 @@ impl DaemonService {
                 if let Some(nodes) = params.nodes {
                     config.nodes = nodes.max(1) as usize;
                 }
+                if let Some(threshold) = params.archive_threshold {
+                    config.archive_threshold = usize::try_from(threshold).unwrap_or(usize::MAX);
+                }
                 radar.update_config(config).map_err(|error| {
                     internal_error(format!("dht radar restart failed: {error}"))
                 })?;
                 self.persist_radar_config(config).await?;
+                // 阈值可能被调低：立刻把超出的部分归档。
+                self.archive_radar_overflow_logged().await;
                 to_value(config_dto(radar.config()))
             }
             method::DAEMON_DHT_RADAR_CLEAR => {
@@ -119,7 +131,64 @@ impl DaemonService {
                 radar.set_saved_rows(0);
                 to_value(DhtRadarClearDto { removed })
             }
+            method::DAEMON_DHT_RADAR_EXPORT => {
+                let rows = self.db.all_dht_radar_torrents().await.map_err(|error| {
+                    internal_error(format!("load dht radar saved rows failed: {error}"))
+                })?;
+                let text = encode_export(&rows, fluxdown_engine::dht_radar::now_unix()).map_err(
+                    |error| internal_error(format!("encode dht radar export failed: {error}")),
+                )?;
+                to_value(DhtRadarExportDto {
+                    count: u64::try_from(rows.len()).unwrap_or(u64::MAX),
+                    text,
+                })
+            }
+            method::DAEMON_DHT_RADAR_IMPORT => {
+                let params = parse_params::<DhtRadarImportParams>(params)?;
+                if params.text.len() > MAX_IMPORT_BYTES {
+                    return Err(invalid_argument("text", "import file is too large"));
+                }
+                let parsed = parse_import(&params.text)
+                    .map_err(|error| invalid_argument("text", &error.to_string()))?;
+                // 先落库（`ON CONFLICT DO NOTHING` 去重），成功后才进内存列表。
+                let imported = self
+                    .db
+                    .import_dht_radar_torrents(&parsed.rows)
+                    .await
+                    .map_err(|error| {
+                        internal_error(format!("import dht radar saved rows failed: {error}"))
+                    })?;
+                let skipped = parsed.total.saturating_sub(imported);
+                radar.import_saved(parsed.rows);
+                if let Ok(count) = self.db.count_dht_radar_torrents().await {
+                    radar.set_saved_rows(count);
+                }
+                // 导入可能把存档推过阈值：立刻归档。
+                self.archive_radar_overflow_logged().await;
+                to_value(DhtRadarImportDto {
+                    imported,
+                    skipped,
+                    invalid: parsed.invalid,
+                })
+            }
             _ => Err(unavailable()),
+        }
+    }
+
+    /// 触发一次 DHT 雷达溢出自归档；失败只记日志，不影响调用方结果。
+    async fn archive_radar_overflow_logged(&self) {
+        let Some(radar) = self.dht_radar.as_ref() else {
+            return;
+        };
+        let archive_dir = crate::dht_radar_archive::archive_dir(&self.data_dir);
+        match crate::dht_radar_archive::archive_overflow(radar, &self.db, &archive_dir).await {
+            Ok(Some(archived)) => tracing::info!(
+                path = %archived.path.display(),
+                rows = archived.rows,
+                "dht radar overflow archived"
+            ),
+            Ok(None) => {}
+            Err(error) => tracing::warn!(%error, "dht radar auto archive failed"),
         }
     }
 
@@ -131,6 +200,7 @@ impl DaemonService {
             (KEY_CAPACITY, config.capacity.to_string()),
             (KEY_METADATA, bool_text(config.metadata)),
             (KEY_NODES, config.nodes.to_string()),
+            (KEY_ARCHIVE_THRESHOLD, config.archive_threshold.to_string()),
         ];
         for (key, value) in pairs {
             if let Err(error) = self.db.set_config(key, &value).await {
@@ -166,11 +236,11 @@ fn item_dto(entry: fluxdown_engine::dht_radar::store::TorrentEntry) -> DhtRadarI
 mod tests {
     use std::sync::Arc;
 
-    use fluxdown_engine::dht_radar::store::{MetadataSummary, Sort};
+    use fluxdown_engine::dht_radar::store::{MetadataSummary, SavedTorrent, Sort};
     use fluxdown_engine::dht_radar::{Radar, RadarConfig};
     use fluxdown_protocol::{
-        ApplicationErrorCode, DhtRadarClearDto, DhtRadarConfigDto, DhtRadarListDto,
-        DhtRadarStatsDto, method,
+        ApplicationErrorCode, DhtRadarClearDto, DhtRadarConfigDto, DhtRadarExportDto,
+        DhtRadarImportDto, DhtRadarListDto, DhtRadarStatsDto, method,
     };
     use serde_json::{Value, json};
 
@@ -210,6 +280,8 @@ mod tests {
             capacity: 64,
             metadata: false,
             nodes: 1,
+            // 测试不触发自动归档，避免写到临时目录之外。
+            archive_threshold: 0,
         });
         let service = DaemonService::new(
             crate::service_hello("dht-radar-rpc-test", Vec::new()),
@@ -288,7 +360,12 @@ mod tests {
             call(
                 &fx,
                 method::DAEMON_DHT_RADAR_CONFIG_SET,
-                Some(json!({ "port": 0, "capacity": 128, "nodes": 2 })),
+                Some(json!({
+                    "port": 0,
+                    "capacity": 128,
+                    "nodes": 2,
+                    "archiveThreshold": 500,
+                })),
             )
             .await
             .expect("config set"),
@@ -296,6 +373,7 @@ mod tests {
         .expect("config dto");
         assert_eq!(patched.capacity, 128);
         assert_eq!(patched.nodes, 2);
+        assert_eq!(patched.archive_threshold, 500);
         assert!(!patched.enabled);
         assert!(!fx.radar.is_running());
 
@@ -317,6 +395,15 @@ mod tests {
                 .expect("read config")
                 .as_deref(),
             Some("2")
+        );
+        assert_eq!(
+            fx.service
+                .db
+                .get_config("dht_radar_archive_threshold")
+                .await
+                .expect("read config")
+                .as_deref(),
+            Some("500")
         );
     }
 
@@ -515,6 +602,8 @@ mod tests {
             capacity: 64,
             metadata: false,
             nodes: 1,
+            // 测试不触发自动归档，避免写到临时目录之外。
+            archive_threshold: 0,
         });
         let saved = fx
             .service
@@ -529,5 +618,143 @@ mod tests {
         assert_eq!(items[0].total_size, Some(4096));
         // 载入的条目不会重复落库。
         assert!(restarted.take_persist_batch(10).is_empty());
+    }
+
+    fn saved_row(seed: u8, name: &str, last_seen: i64) -> SavedTorrent {
+        SavedTorrent {
+            infohash: [seed; 20],
+            name: name.to_owned(),
+            total_size: Some(2048),
+            file_count: Some(1),
+            peers: 3,
+            first_seen: 10,
+            last_seen,
+        }
+    }
+
+    #[tokio::test]
+    async fn export_returns_importable_document() {
+        let fx = fixture(true).await;
+        fx.service
+            .db
+            .upsert_dht_radar_torrents(&[
+                saved_row(0xab, "debian.iso", 100),
+                saved_row(0xcd, "ubuntu.iso", 200),
+            ])
+            .await
+            .expect("insert");
+
+        let exported: DhtRadarExportDto = serde_json::from_value(
+            call(&fx, method::DAEMON_DHT_RADAR_EXPORT, None)
+                .await
+                .expect("export"),
+        )
+        .expect("export dto");
+        assert_eq!(exported.count, 2);
+        let parsed =
+            fluxdown_engine::dht_radar::archive::parse_import(&exported.text).expect("parse");
+        assert_eq!(parsed.invalid, 0);
+        assert_eq!(parsed.rows.len(), 2);
+        assert_eq!(parsed.rows[0].name, "ubuntu.iso");
+    }
+
+    #[tokio::test]
+    async fn import_dedupes_against_saved_rows_and_memory() {
+        let fx = fixture(true).await;
+        fx.service
+            .db
+            .upsert_dht_radar_torrents(&[saved_row(0xab, "existing.iso", 100)])
+            .await
+            .expect("insert");
+        // 模拟 daemon 启动时从库里回填内存。
+        let saved = fx
+            .service
+            .db
+            .load_dht_radar_torrents(64)
+            .await
+            .expect("load");
+        fx.radar.seed_saved(saved);
+
+        // 文件里同时有「库里已存在」与「新条目」，前者改名也仍然是同一条。
+        let text = format!(
+            r#"{{"version":1,"items":[
+                {{"infoHash":"{existing}","name":"renamed.iso","lastSeen":300}},
+                {{"infoHash":"{new}","name":"new.iso","totalSize":99,"lastSeen":400}}
+            ]}}"#,
+            existing = "ab".repeat(20),
+            new = "ef".repeat(20)
+        );
+        let imported: DhtRadarImportDto = serde_json::from_value(
+            call(
+                &fx,
+                method::DAEMON_DHT_RADAR_IMPORT,
+                Some(json!({ "text": text })),
+            )
+            .await
+            .expect("import"),
+        )
+        .expect("import dto");
+        assert_eq!(imported.imported, 1);
+        assert_eq!(imported.skipped, 1);
+        assert_eq!(imported.invalid, 0);
+
+        assert_eq!(
+            fx.service
+                .db
+                .count_dht_radar_torrents()
+                .await
+                .expect("count"),
+            2
+        );
+        // 新条目立即可见，已有条目保留原名。
+        let page: DhtRadarListDto = serde_json::from_value(
+            call(
+                &fx,
+                method::DAEMON_DHT_RADAR_LIST,
+                Some(json!({ "limit": 10 })),
+            )
+            .await
+            .expect("list"),
+        )
+        .expect("list dto");
+        assert_eq!(page.total, 2);
+        let names: Vec<Option<&str>> = page.items.iter().map(|item| item.name.as_deref()).collect();
+        assert!(names.contains(&Some("new.iso")), "{names:?}");
+        assert!(names.contains(&Some("existing.iso")), "{names:?}");
+
+        // 再导入同一份文件：全部是重复。
+        let again: DhtRadarImportDto = serde_json::from_value(
+            call(
+                &fx,
+                method::DAEMON_DHT_RADAR_IMPORT,
+                Some(json!({ "text": text })),
+            )
+            .await
+            .expect("import again"),
+        )
+        .expect("import dto");
+        assert_eq!(again.imported, 0);
+        assert_eq!(again.skipped, 2);
+    }
+
+    #[tokio::test]
+    async fn import_rejects_malformed_payload() {
+        let fx = fixture(true).await;
+        let error = call(
+            &fx,
+            method::DAEMON_DHT_RADAR_IMPORT,
+            Some(json!({ "text": "not json" })),
+        )
+        .await
+        .expect_err("invalid import");
+        assert_eq!(code(&error), ApplicationErrorCode::InvalidArgument);
+        let error = call(
+            &fx,
+            method::DAEMON_DHT_RADAR_IMPORT,
+            Some(json!({ "text": "{\"version\":99,\"items\":[]}" })),
+        )
+        .await
+        .expect_err("future version");
+        assert_eq!(code(&error), ApplicationErrorCode::InvalidArgument);
     }
 }

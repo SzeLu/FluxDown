@@ -1722,7 +1722,9 @@ impl DaemonService {
             | method::DAEMON_DHT_RADAR_STATS
             | method::DAEMON_DHT_RADAR_CONFIG
             | method::DAEMON_DHT_RADAR_CONFIG_SET
-            | method::DAEMON_DHT_RADAR_CLEAR => self.dht_radar_call(method_name, params).await,
+            | method::DAEMON_DHT_RADAR_CLEAR
+            | method::DAEMON_DHT_RADAR_EXPORT
+            | method::DAEMON_DHT_RADAR_IMPORT => self.dht_radar_call(method_name, params).await,
             method::DAEMON_BT_TRACKER_SUBSCRIPTION_REFRESH => {
                 match self
                     .actor

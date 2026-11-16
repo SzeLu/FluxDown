@@ -1076,6 +1076,28 @@ async fn prune_task_activity(
     Ok(())
 }
 
+/// 把 `dht_radar_torrents` 的一行映射成 [`SavedTorrent`]；infohash 损坏时返回 `None`。
+fn saved_torrent_from_row(
+    row: &AnyRow,
+) -> Result<Option<crate::dht_radar::store::SavedTorrent>, sqlx::Error> {
+    let hash: String = row.try_get("info_hash")?;
+    let Some(infohash) = crate::dht_radar::store::parse_hex(&hash) else {
+        return Ok(None);
+    };
+    let total_size: Option<i64> = row.try_get("total_size")?;
+    let file_count: Option<i64> = row.try_get("file_count")?;
+    let peers: i64 = row.try_get("peers")?;
+    Ok(Some(crate::dht_radar::store::SavedTorrent {
+        infohash,
+        name: row.try_get("name")?,
+        total_size: total_size.and_then(|value| u64::try_from(value).ok()),
+        file_count: file_count.and_then(|value| u32::try_from(value).ok()),
+        peers: u32::try_from(peers).unwrap_or(u32::MAX),
+        first_seen: row.try_get("first_seen")?,
+        last_seen: row.try_get("last_seen")?,
+    }))
+}
+
 /// 插件审计保留策略：90 天与最近 2 万条两条约束同时生效。
 #[cfg(feature = "plugins")]
 const PLUGIN_AUDIT_MAX_AGE_MS: i64 = 90 * 24 * 60 * 60 * 1000;
@@ -3631,22 +3653,9 @@ impl Db {
         .await?;
         let mut out = Vec::with_capacity(rows.len());
         for row in &rows {
-            let hash: String = row.try_get("info_hash")?;
-            let Some(infohash) = crate::dht_radar::store::parse_hex(&hash) else {
-                continue;
-            };
-            let total_size: Option<i64> = row.try_get("total_size")?;
-            let file_count: Option<i64> = row.try_get("file_count")?;
-            let peers: i64 = row.try_get("peers")?;
-            out.push(crate::dht_radar::store::SavedTorrent {
-                infohash,
-                name: row.try_get("name")?,
-                total_size: total_size.and_then(|value| u64::try_from(value).ok()),
-                file_count: file_count.and_then(|value| u32::try_from(value).ok()),
-                peers: u32::try_from(peers).unwrap_or(u32::MAX),
-                first_seen: row.try_get("first_seen")?,
-                last_seen: row.try_get("last_seen")?,
-            });
+            if let Some(saved) = saved_torrent_from_row(row)? {
+                out.push(saved);
+            }
         }
         Ok(out)
     }
@@ -3665,6 +3674,94 @@ impl Db {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected())
+    }
+
+    /// 导出用：读取全部已保存种子（按最近观测倒序）。
+    pub async fn all_dht_radar_torrents(
+        &self,
+    ) -> Result<Vec<crate::dht_radar::store::SavedTorrent>, DbError> {
+        self.load_dht_radar_torrents(usize::MAX).await
+    }
+
+    /// 自动归档用：读取最久未观测、排在最近 `keep` 条之后的行（只读，不删除）。
+    pub async fn old_dht_radar_torrents(
+        &self,
+        keep: u64,
+    ) -> Result<Vec<crate::dht_radar::store::SavedTorrent>, DbError> {
+        let offset = i64::try_from(keep).unwrap_or(i64::MAX);
+        // SQLite 的 OFFSET 必须跟 LIMIT 一起出现，`LIMIT -1` 表示不限；PostgreSQL 直接省略 LIMIT。
+        let sql = match self.backend {
+            Backend::Sqlite => {
+                "SELECT info_hash, name, total_size, file_count, peers, first_seen, last_seen \
+                 FROM dht_radar_torrents ORDER BY last_seen DESC, info_hash ASC \
+                 LIMIT -1 OFFSET $1"
+            }
+            Backend::Postgres => {
+                "SELECT info_hash, name, total_size, file_count, peers, first_seen, last_seen \
+                 FROM dht_radar_torrents ORDER BY last_seen DESC, info_hash ASC OFFSET $1"
+            }
+        };
+        let rows = sqlx::query(sql).bind(offset).fetch_all(&self.pool).await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
+            if let Some(saved) = saved_torrent_from_row(row)? {
+                out.push(saved);
+            }
+        }
+        Ok(out)
+    }
+
+    /// 导入：只插入库里不存在的 infohash（去重），返回新增条数。
+    pub async fn import_dht_radar_torrents(
+        &self,
+        rows: &[crate::dht_radar::store::SavedTorrent],
+    ) -> Result<u64, DbError> {
+        if rows.is_empty() {
+            return Ok(0);
+        }
+        let mut transaction = self.pool.begin().await?;
+        let mut inserted = 0u64;
+        for row in rows {
+            let result = sqlx::query(
+                "INSERT INTO dht_radar_torrents \
+                 (info_hash, name, total_size, file_count, peers, first_seen, last_seen) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7) \
+                 ON CONFLICT (info_hash) DO NOTHING",
+            )
+            .bind(crate::dht_radar::store::hex(&row.infohash))
+            .bind(&row.name)
+            .bind(row.total_size.and_then(|value| i64::try_from(value).ok()))
+            .bind(row.file_count.map(i64::from))
+            .bind(i64::from(row.peers))
+            .bind(row.first_seen)
+            .bind(row.last_seen)
+            .execute(&mut *transaction)
+            .await?;
+            inserted = inserted.saturating_add(result.rows_affected());
+        }
+        transaction.commit().await?;
+        Ok(inserted)
+    }
+
+    /// 删除指定存档行（归档写盘成功后调用），返回删除条数。
+    pub async fn delete_dht_radar_torrents(
+        &self,
+        hashes: &[crate::dht_radar::store::InfoHash],
+    ) -> Result<u64, DbError> {
+        if hashes.is_empty() {
+            return Ok(0);
+        }
+        let mut transaction = self.pool.begin().await?;
+        let mut removed = 0u64;
+        for infohash in hashes {
+            let result = sqlx::query("DELETE FROM dht_radar_torrents WHERE info_hash = $1")
+                .bind(crate::dht_radar::store::hex(infohash))
+                .execute(&mut *transaction)
+                .await?;
+            removed = removed.saturating_add(result.rows_affected());
+        }
+        transaction.commit().await?;
+        Ok(removed)
     }
 
     /// 比较 revision 并在一个事务中提交全部配置值与下一 revision。
@@ -10560,6 +10657,66 @@ mod tests {
 
         assert_eq!(db.clear_dht_radar_torrents().await.expect("clear"), 2);
         assert_eq!(db.count_dht_radar_torrents().await.expect("count"), 0);
+        close_test_db(&db, dir).await;
+    }
+
+    #[tokio::test]
+    async fn dht_radar_import_dedupes_and_archive_reads_overflow() {
+        use crate::dht_radar::store::{SavedTorrent, parse_hex};
+
+        let (db, dir) = open_test_db().await;
+        let row = |seed: u8, name: &str, last_seen: i64| SavedTorrent {
+            infohash: [seed; 20],
+            name: name.to_owned(),
+            total_size: Some(1024),
+            file_count: Some(1),
+            peers: 2,
+            first_seen: 10,
+            last_seen,
+        };
+        let existing = row(1, "existing.iso", 100);
+        let middle = row(2, "middle.iso", 200);
+        let newest = row(3, "newest.iso", 300);
+        db.upsert_dht_radar_torrents(&[existing.clone(), middle, newest])
+            .await
+            .expect("seed rows");
+
+        // 导入：已存在的 infohash 不覆盖（名字保持原样），新条目才插入。
+        let renamed = SavedTorrent {
+            name: "renamed.iso".to_owned(),
+            ..existing.clone()
+        };
+        let incoming = row(4, "incoming.iso", 400);
+        let inserted = db
+            .import_dht_radar_torrents(&[renamed, incoming])
+            .await
+            .expect("import");
+        assert_eq!(inserted, 1);
+        let all = db.all_dht_radar_torrents().await.expect("all");
+        assert_eq!(all.len(), 4);
+        assert!(
+            all.iter()
+                .any(|saved| saved.infohash == existing.infohash && saved.name == "existing.iso")
+        );
+
+        // 保留最近 2 条：超出的最旧两行按最近观测倒序读出。
+        let overflow = db.old_dht_radar_torrents(2).await.expect("old rows");
+        assert_eq!(overflow.len(), 2);
+        assert_eq!(
+            overflow[0].infohash,
+            parse_hex(&"02".repeat(20)).expect("hash")
+        );
+        assert_eq!(
+            overflow[1].infohash,
+            parse_hex(&"01".repeat(20)).expect("hash")
+        );
+
+        let hashes: Vec<_> = overflow.iter().map(|saved| saved.infohash).collect();
+        assert_eq!(
+            db.delete_dht_radar_torrents(&hashes).await.expect("delete"),
+            2
+        );
+        assert_eq!(db.count_dht_radar_torrents().await.expect("count"), 2);
         close_test_db(&db, dir).await;
     }
 }

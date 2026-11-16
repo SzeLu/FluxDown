@@ -505,6 +505,78 @@ impl Store {
         loaded
     }
 
+    /// 导入已保存的条目（按 infohash 去重），返回新增到内存列表的条数。
+    ///
+    /// 已存在的条目只补缺失的元数据并扩展时间窗；导入的条目没有 peer 地址，
+    /// 因此不会触发元数据重抓，也不会重复排队落库。
+    pub fn import_saved(&self, rows: Vec<SavedTorrent>) -> usize {
+        let mut inner = lock(&self.inner);
+        let mut added = 0usize;
+        for row in rows {
+            if let Some(stored) = inner.torrents.get_mut(&row.infohash) {
+                let entry = &mut stored.entry;
+                if entry.name.is_none() {
+                    entry.name = Some(row.name);
+                    entry.total_size = row.total_size;
+                    entry.file_count = row.file_count;
+                    entry.metadata = MetadataState::Ready;
+                } else {
+                    entry.total_size = entry.total_size.or(row.total_size);
+                    entry.file_count = entry.file_count.or(row.file_count);
+                }
+                entry.peers = entry.peers.max(row.peers);
+                if row.first_seen > 0 {
+                    entry.first_seen = if entry.first_seen <= 0 {
+                        row.first_seen
+                    } else {
+                        entry.first_seen.min(row.first_seen)
+                    };
+                }
+                entry.last_seen = entry.last_seen.max(row.last_seen);
+                continue;
+            }
+            inner.torrents.insert(
+                row.infohash,
+                Stored {
+                    entry: TorrentEntry {
+                        infohash: row.infohash,
+                        name: Some(row.name),
+                        total_size: row.total_size,
+                        file_count: row.file_count,
+                        peers: row.peers,
+                        first_seen: row.first_seen,
+                        last_seen: row.last_seen,
+                        metadata: MetadataState::Ready,
+                    },
+                    // 导入的条目没有 peer 地址（导出文件不带），不会重抓元数据。
+                    peers: Vec::new(),
+                    attempts: 0,
+                    retry_after: 0,
+                    persisted_at: row.last_seen,
+                    last_attempt: 0,
+                },
+            );
+            added += 1;
+        }
+        if inner.torrents.len() > self.capacity {
+            Self::evict(&mut inner, self.capacity);
+        }
+        added
+    }
+
+    /// 从内存列表移除条目（归档成功后调用），返回实际移除条数。
+    pub fn remove_saved(&self, hashes: &[InfoHash]) -> usize {
+        let mut inner = lock(&self.inner);
+        let mut removed = 0usize;
+        for infohash in hashes {
+            if inner.torrents.remove(infohash).is_some() {
+                removed += 1;
+            }
+            inner.pending_persist.remove(infohash);
+        }
+        removed
+    }
+
     /// 取一批待写库的条目。取出的条目视为「已交付」；写库失败请用
     /// [`Self::requeue_persist`] 放回队列。
     pub fn take_pending_persist(&self, limit: usize) -> Vec<SavedTorrent> {
@@ -837,6 +909,83 @@ mod tests {
         assert_eq!(page[0].name.as_deref(), Some("known.iso"));
         assert_eq!(page[0].last_seen, 500);
         assert_eq!(page[0].peers, 1);
+    }
+
+    #[test]
+    fn import_adds_new_entries_and_fills_existing() {
+        let store = Store::new(64);
+        store.observe(hash(1), Some(peer(1)), 500);
+        let added = store.import_saved(vec![
+            SavedTorrent {
+                infohash: hash(1),
+                name: "imported.iso".to_owned(),
+                total_size: Some(42),
+                file_count: Some(1),
+                peers: 4,
+                first_seen: 100,
+                last_seen: 300,
+            },
+            SavedTorrent {
+                infohash: hash(2),
+                name: "new.iso".to_owned(),
+                total_size: None,
+                file_count: None,
+                peers: 2,
+                first_seen: 50,
+                last_seen: 60,
+            },
+        ]);
+        assert_eq!(added, 1, "已存在的条目只合并，不重复添加");
+        let (page, total) = store.query(None, Sort::Recent, 0, 10);
+        assert_eq!(total, 2);
+        let existing = page
+            .iter()
+            .find(|entry| entry.infohash == hash(1))
+            .expect("existing");
+        assert_eq!(existing.name.as_deref(), Some("imported.iso"));
+        assert_eq!(existing.total_size, Some(42));
+        assert_eq!(existing.peers, 4, "peer 数取较大值");
+        assert_eq!(existing.first_seen, 100, "首次观测时间取较早值");
+        assert_eq!(existing.last_seen, 500, "最近观测时间取较晚值");
+        assert_eq!(existing.metadata, MetadataState::Ready);
+        // 导入不排队落库，也不会触发元数据重抓。
+        assert!(store.take_pending_persist(10).is_empty());
+        assert!(store.metadata_candidates(10, NOW).is_empty());
+
+        // 再导入同一批：全部命中已有条目。
+        assert_eq!(
+            store.import_saved(vec![SavedTorrent {
+                infohash: hash(2),
+                name: "new.iso".to_owned(),
+                total_size: None,
+                file_count: None,
+                peers: 2,
+                first_seen: 50,
+                last_seen: 60,
+            }]),
+            0
+        );
+    }
+
+    #[test]
+    fn remove_saved_drops_entries_and_pending_persist() {
+        let store = Store::new(64);
+        store.observe(hash(1), Some(peer(1)), NOW);
+        store.set_metadata(
+            hash(1),
+            MetadataSummary {
+                name: Some("gone.iso".to_owned()),
+                total_size: None,
+                file_count: None,
+            },
+            NOW,
+        );
+        assert_eq!(store.remove_saved(&[hash(1)]), 1);
+        assert_eq!(store.query(None, Sort::Recent, 0, 10).1, 0);
+        // 待写队列里的条目也一并丢弃，避免归档后又被刷回库。
+        assert!(store.take_pending_persist(10).is_empty());
+        // 重复移除不报错。
+        assert_eq!(store.remove_saved(&[hash(1)]), 0);
     }
 
     #[test]

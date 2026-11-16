@@ -9,6 +9,7 @@
 //! 采集线程是普通 `std::thread` + 阻塞 socket：DHT 是超时驱动的小报文，用不上异步运行时，
 //! 也避免与下载引擎的 tokio 调度抢资源。
 
+pub mod archive;
 pub mod bencode;
 pub mod crawler;
 pub mod krpc;
@@ -25,6 +26,9 @@ use crate::dht_radar::store::{InfoHash, Sort, Store, StoreStats, TorrentEntry};
 pub const DEFAULT_PORT: u16 = 6881;
 /// 默认保留的种子条数。
 pub const DEFAULT_CAPACITY: usize = 20_000;
+/// 默认的自动归档阈值：数据库里的存档超过这个条数时，最久未观测的部分会自动打包归档。
+/// 0 表示关闭自动归档。
+pub const DEFAULT_ARCHIVE_THRESHOLD: usize = 10_000;
 /// 默认虚拟节点数。单个随机 ID 的节点极少被别的节点查询，多开几个才收得到
 /// `get_peers` / `announce_peer`（每个节点独立 UDP 端口与节点 ID）。
 pub const DEFAULT_NODES: usize = 8;
@@ -48,6 +52,9 @@ pub struct RadarConfig {
     pub metadata: bool,
     /// 虚拟节点数。
     pub nodes: usize,
+    /// 自动归档阈值：已保存条目超过这个数量时，最旧的部分打包归档并从列表删除。
+    /// 0 表示关闭自动归档。
+    pub archive_threshold: usize,
 }
 
 impl Default for RadarConfig {
@@ -58,6 +65,7 @@ impl Default for RadarConfig {
             capacity: DEFAULT_CAPACITY,
             metadata: true,
             nodes: DEFAULT_NODES,
+            archive_threshold: DEFAULT_ARCHIVE_THRESHOLD,
         }
     }
 }
@@ -311,6 +319,18 @@ impl Radar {
         self.saved_rows
             .store(u64::try_from(loaded).unwrap_or(u64::MAX), Ordering::Relaxed);
         loaded
+    }
+
+    /// 导入已保存条目（按 infohash 去重），返回新增到内存列表的条数。
+    ///
+    /// 「数据库已保存条数」由调用方按库里的实际计数回填，这里不改。
+    pub fn import_saved(&self, rows: Vec<store::SavedTorrent>) -> usize {
+        self.store.import_saved(rows)
+    }
+
+    /// 归档后从内存列表移除条目，返回实际移除条数。
+    pub fn remove_saved(&self, hashes: &[store::InfoHash]) -> usize {
+        self.store.remove_saved(hashes)
     }
 
     /// 取一批待写库的条目（已解析出名字的）。

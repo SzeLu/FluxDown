@@ -6,6 +6,7 @@
 pub mod actor;
 pub mod blob_store;
 pub mod config;
+mod dht_radar_archive;
 mod disk_free;
 mod doctor_probe;
 pub mod event_hub;

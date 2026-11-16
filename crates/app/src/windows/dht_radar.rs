@@ -8,16 +8,16 @@ use std::time::Duration;
 
 use fluxdown_protocol::{
     CreateTaskRequest, DaemonCreateTaskParams, DhtRadarClearDto, DhtRadarConfigDto,
-    DhtRadarItemDto, DhtRadarListDto, DhtRadarListParams, DhtRadarSetConfigParams,
-    DhtRadarStatsDto, method,
+    DhtRadarExportDto, DhtRadarImportDto, DhtRadarImportParams, DhtRadarItemDto, DhtRadarListDto,
+    DhtRadarListParams, DhtRadarSetConfigParams, DhtRadarStatsDto, method,
 };
 use fluxdown_ui_components::{ButtonVariant, card, loading_button};
 use fluxdown_ui_i18n::Translator;
 use fluxdown_ui_theme::active_theme;
 use gpui::{
     AnyElement, App, ClickEvent, ClipboardItem, Context, Div, FontWeight, InteractiveElement as _,
-    IntoElement, ParentElement as _, Render, SharedString, StatefulInteractiveElement as _,
-    Styled as _, Window, div, prelude::FluentBuilder as _, px,
+    IntoElement, ParentElement as _, PathPromptOptions, Render, SharedString,
+    StatefulInteractiveElement as _, Styled as _, Window, div, prelude::FluentBuilder as _, px,
 };
 use gpui_component::{h_flex, scroll::ScrollableElement as _, v_flex};
 use serde_json::Value;
@@ -29,6 +29,10 @@ use crate::app::Desktop;
 const PAGE_LIMIT: u32 = 200;
 /// 轮询间隔。
 const REFRESH_INTERVAL: Duration = Duration::from_secs(3);
+/// 导出文件的建议名。
+const EXPORT_FILE_NAME: &str = "fluxdown-dht-radar.json";
+/// 导入文件的大小上限（与 daemon 侧一致）。
+const MAX_IMPORT_BYTES: u64 = 16 * 1024 * 1024;
 
 /// 排序方式，与 daemon 的 `sort` 参数一一对应。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -221,6 +225,7 @@ impl DhtRadarView {
             capacity: None,
             metadata: None,
             nodes: None,
+            archive_threshold: None,
         };
         cx.spawn(async move |this, cx| {
             let result = client
@@ -355,6 +360,134 @@ impl DhtRadarView {
         .detach();
     }
 
+    /// 导出全部已保存的种子：先选保存位置，再取 JSON 文本写盘。
+    fn export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        let directory = std::env::home_dir().unwrap_or_else(std::env::temp_dir);
+        let receiver = cx.prompt_for_new_path(&directory, Some(EXPORT_FILE_NAME));
+        let client = Arc::clone(&self.client);
+        self.busy = true;
+        self.notice = None;
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let path = match receiver.await {
+                Ok(Ok(Some(path))) => path,
+                _ => {
+                    // 用户取消：恢复按钮，不报错。
+                    drop(this.update_in(cx, |this, _, cx| {
+                        this.busy = false;
+                        cx.notify();
+                    }));
+                    return;
+                }
+            };
+            let written = match client
+                .call::<Value, DhtRadarExportDto>(method::DAEMON_DHT_RADAR_EXPORT, None)
+                .await
+            {
+                Ok(dto) if dto.count > 0 => {
+                    let count = dto.count;
+                    let text = dto.text;
+                    cx.background_executor()
+                        .spawn(async move { std::fs::write(&path, text) })
+                        .await
+                        .ok()
+                        .map(|()| count)
+                }
+                // 没有存档时也把选择的路径当成一次成功的空导出说清楚。
+                Ok(_) => Some(0),
+                Err(_) => None,
+            };
+            drop(this.update_in(cx, |this, _, cx| {
+                this.busy = false;
+                this.notice = Some(match written {
+                    None => this.t("dhtRadarExportFailed"),
+                    Some(0) => this.t("dhtRadarExportEmpty"),
+                    Some(count) => SharedString::from(
+                        this.translator
+                            .text_with("dhtRadarExported", &[("n", &count.to_string())]),
+                    ),
+                });
+                cx.notify();
+            }));
+        })
+        .detach();
+    }
+
+    /// 导入导出文件：读盘后交给 daemon 去重合并，再刷新列表。
+    fn import(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        let receiver = cx.prompt_for_paths(PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some(self.t("dhtRadarImport")),
+        });
+        let client = Arc::clone(&self.client);
+        self.busy = true;
+        self.notice = None;
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let path = match receiver.await {
+                Ok(Ok(Some(mut paths))) => paths.pop(),
+                _ => None,
+            };
+            let Some(path) = path else {
+                // 用户取消：恢复按钮，不报错。
+                drop(this.update_in(cx, |this, _, cx| {
+                    this.busy = false;
+                    cx.notify();
+                }));
+                return;
+            };
+            let text = cx
+                .background_executor()
+                .spawn(async move {
+                    let size = std::fs::metadata(&path).ok()?.len();
+                    if size > MAX_IMPORT_BYTES {
+                        return None;
+                    }
+                    std::fs::read_to_string(&path).ok()
+                })
+                .await;
+            let result = match text {
+                None => None,
+                Some(text) => client
+                    .call::<DhtRadarImportParams, DhtRadarImportDto>(
+                        method::DAEMON_DHT_RADAR_IMPORT,
+                        Some(DhtRadarImportParams { text }),
+                    )
+                    .await
+                    .ok(),
+            };
+            drop(this.update_in(cx, |this, _, cx| {
+                this.busy = false;
+                match result {
+                    Some(dto) => {
+                        this.notice = Some(SharedString::from(this.translator.text_with(
+                            "dhtRadarImported",
+                            &[
+                                ("n", &dto.imported.to_string()),
+                                ("skipped", &dto.skipped.to_string()),
+                                ("invalid", &dto.invalid.to_string()),
+                            ],
+                        )));
+                        this.refresh(cx);
+                    }
+                    None => {
+                        this.notice = Some(this.t("dhtRadarImportFailed"));
+                        cx.notify();
+                    }
+                }
+            }));
+        })
+        .detach();
+    }
+
     /// 顶部统计条：运行状态 + 节点 / 种子 / 报文。
     fn stats_line(&self, cx: &App) -> Div {
         let tokens = active_theme(cx).tokens().clone();
@@ -389,6 +522,14 @@ impl DhtRadarView {
             if stats.port > 0 {
                 parts.push(SharedString::from(format!("UDP: {}", stats.port)));
             }
+        }
+        if let Some(config) = self.config
+            && config.archive_threshold > 0
+        {
+            parts.push(SharedString::from(self.translator.text_with(
+                "dhtRadarArchiveLimit",
+                &[("n", &config.archive_threshold.to_string())],
+            )));
         }
         let running = self.stats.as_ref().is_some_and(|stats| stats.running);
         let state = self.t(if running {
@@ -459,6 +600,26 @@ impl DhtRadarView {
                     cx,
                 )
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.refresh(cx))),
+            )
+            .child(
+                loading_button(
+                    "dht-radar-export",
+                    self.t("dhtRadarExport"),
+                    ButtonVariant::Secondary,
+                    self.busy,
+                    cx,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.export(window, cx))),
+            )
+            .child(
+                loading_button(
+                    "dht-radar-import",
+                    self.t("dhtRadarImport"),
+                    ButtonVariant::Secondary,
+                    self.busy,
+                    cx,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, window, cx| this.import(window, cx))),
             );
         // 有存档时才显示：清空是不可撤销的写操作，放在次要按钮位并要二次确认。
         if self.stats.as_ref().is_some_and(|stats| stats.saved > 0) {

@@ -313,6 +313,11 @@ pub async fn run_with(
                 .get("dht_radar_nodes")
                 .and_then(|value| value.parse().ok())
                 .unwrap_or(fluxdown_engine::dht_radar::DEFAULT_NODES),
+            archive_threshold: usize_config(
+                &all_config,
+                "dht_radar_archive_threshold",
+                fluxdown_engine::dht_radar::DEFAULT_ARCHIVE_THRESHOLD,
+            ),
         };
         let radar = fluxdown_engine::dht_radar::Radar::new(config);
         // 回填历史存档：重启后列表立刻能看到之前解析出名字的资源。
@@ -335,7 +340,29 @@ pub async fn run_with(
         }
         radar
     };
-    spawn_dht_radar_persist(Arc::clone(&dht_radar), service_db.clone(), cancel.clone());
+    let dht_radar_archive_dir = crate::dht_radar_archive::archive_dir(&data_dir);
+    // 上次退出时可能已经超过归档阈值：启动时补一次，列表与磁盘随即一致。
+    match crate::dht_radar_archive::archive_overflow(
+        &dht_radar,
+        &service_db,
+        &dht_radar_archive_dir,
+    )
+    .await
+    {
+        Ok(Some(archived)) => tracing::info!(
+            path = %archived.path.display(),
+            rows = archived.rows,
+            "dht radar overflow archived at startup"
+        ),
+        Ok(None) => {}
+        Err(error) => tracing::warn!(%error, "dht radar startup archive failed"),
+    }
+    spawn_dht_radar_persist(
+        Arc::clone(&dht_radar),
+        service_db.clone(),
+        dht_radar_archive_dir,
+        cancel.clone(),
+    );
 
     let token =
         load_or_create_token(&data_dir, process_config.token_file_override.as_deref()).await?;
@@ -913,6 +940,7 @@ fn usize_config(config: &HashMap<String, String>, key: &str, fallback: usize) ->
 fn spawn_dht_radar_persist(
     radar: Arc<fluxdown_engine::dht_radar::Radar>,
     db: Db,
+    archive_dir: std::path::PathBuf,
     cancel: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -931,6 +959,18 @@ fn spawn_dht_radar_persist(
                 Ok(()) => {
                     if let Ok(count) = db.count_dht_radar_torrents().await {
                         radar.set_saved_rows(count);
+                    }
+                    // 只在刚写过库时检查阈值：空闲时不做周期性读数据目录。
+                    match crate::dht_radar_archive::archive_overflow(&radar, &db, &archive_dir)
+                        .await
+                    {
+                        Ok(Some(archived)) => tracing::info!(
+                            path = %archived.path.display(),
+                            rows = archived.rows,
+                            "dht radar overflow archived"
+                        ),
+                        Ok(None) => {}
+                        Err(error) => tracing::warn!(%error, "dht radar auto archive failed"),
                     }
                 }
                 Err(error) => {

@@ -4710,6 +4710,8 @@ pub struct DhtRadarConfigDto {
     pub metadata: bool,
     /// 虚拟节点数。
     pub nodes: u32,
+    /// 自动归档阈值：已保存条目超过这个数量时，最旧的部分打包归档并从列表删除；0 = 关闭。
+    pub archive_threshold: u32,
 }
 
 /// `daemon.dht.radar.config.set` 参数；只提交需要修改的字段。
@@ -4727,6 +4729,9 @@ pub struct DhtRadarSetConfigParams {
     pub metadata: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nodes: Option<u32>,
+    /// 自动归档阈值；0 = 关闭自动归档。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archive_threshold: Option<u32>,
 }
 
 /// `daemon.dht.radar.clear` 结果。
@@ -4736,4 +4741,37 @@ pub struct DhtRadarSetConfigParams {
 pub struct DhtRadarClearDto {
     /// 被删除的存档条数。
     pub removed: u64,
+}
+
+/// `daemon.dht.radar.export` 结果：可直接再次导入的 JSON 文本。
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DhtRadarExportDto {
+    /// 导出的条目数。
+    pub count: u64,
+    /// 导出文件内容（UTF-8 JSON）。
+    pub text: String,
+}
+
+/// `daemon.dht.radar.import` 参数。
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DhtRadarImportParams {
+    /// 导出文件内容（UTF-8 JSON）。
+    pub text: String,
+}
+
+/// `daemon.dht.radar.import` 结果。
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DhtRadarImportDto {
+    /// 新增到存档的条数（库里不存在的 infohash）。
+    pub imported: u64,
+    /// 因重复而跳过的条数（文件内重复 + 库里已存在）。
+    pub skipped: u64,
+    /// 文件里无法解析而忽略的条数。
+    pub invalid: u64,
 }
