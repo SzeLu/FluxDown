@@ -395,6 +395,17 @@ CREATE TABLE IF NOT EXISTS bt_guard_cloud_meta (
     id INTEGER PRIMARY KEY,
     data TEXT NOT NULL
 );
+-- DHT 种子雷达：已解析出名字的种子存档，重启后仍可浏览（内存里只保留最近的若干条）。
+CREATE TABLE IF NOT EXISTS dht_radar_torrents (
+    info_hash TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    total_size BIGINT,
+    file_count INTEGER,
+    peers INTEGER NOT NULL DEFAULT 0,
+    first_seen BIGINT NOT NULL,
+    last_seen BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dht_radar_torrents_last_seen ON dht_radar_torrents(last_seen);
 ";
 
 /// 建表 DDL（PostgreSQL 方言）。
@@ -689,6 +700,17 @@ CREATE TABLE IF NOT EXISTS bt_guard_cloud_meta (
     id INTEGER PRIMARY KEY,
     data TEXT NOT NULL
 );
+-- DHT 种子雷达：已解析出名字的种子存档，重启后仍可浏览（内存里只保留最近的若干条）。
+CREATE TABLE IF NOT EXISTS dht_radar_torrents (
+    info_hash TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    total_size BIGINT,
+    file_count INTEGER,
+    peers INTEGER NOT NULL DEFAULT 0,
+    first_seen BIGINT NOT NULL,
+    last_seen BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dht_radar_torrents_last_seen ON dht_radar_torrents(last_seen);
 ";
 
 /// SQLite 连接级 PRAGMA（在 after_connect 钩子中对每个新连接执行）。
@@ -3506,6 +3528,92 @@ impl Db {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    // ---- DHT 种子雷达：已解析出名字的种子存档 ----
+
+    /// 批量写入雷达已解析的种子（幂等 upsert；`first_seen` 保留最早一次观测）。
+    pub async fn upsert_dht_radar_torrents(
+        &self,
+        rows: &[crate::dht_radar::store::SavedTorrent],
+    ) -> Result<(), DbError> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let mut transaction = self.pool.begin().await?;
+        for row in rows {
+            sqlx::query(
+                "INSERT INTO dht_radar_torrents \
+                 (info_hash, name, total_size, file_count, peers, first_seen, last_seen) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7) \
+                 ON CONFLICT (info_hash) DO UPDATE SET \
+                 name = excluded.name, total_size = excluded.total_size, \
+                 file_count = excluded.file_count, peers = excluded.peers, \
+                 last_seen = excluded.last_seen",
+            )
+            .bind(crate::dht_radar::store::hex(&row.infohash))
+            .bind(&row.name)
+            .bind(row.total_size.and_then(|value| i64::try_from(value).ok()))
+            .bind(row.file_count.map(i64::from))
+            .bind(i64::from(row.peers))
+            .bind(row.first_seen)
+            .bind(row.last_seen)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+        Ok(())
+    }
+
+    /// 读取最近的已保存种子（按最近观测倒序），供启动时回填内存。
+    pub async fn load_dht_radar_torrents(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<crate::dht_radar::store::SavedTorrent>, DbError> {
+        let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let rows = sqlx::query(
+            "SELECT info_hash, name, total_size, file_count, peers, first_seen, last_seen \
+             FROM dht_radar_torrents ORDER BY last_seen DESC LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::with_capacity(rows.len());
+        for row in &rows {
+            let hash: String = row.try_get("info_hash")?;
+            let Some(infohash) = crate::dht_radar::store::parse_hex(&hash) else {
+                continue;
+            };
+            let total_size: Option<i64> = row.try_get("total_size")?;
+            let file_count: Option<i64> = row.try_get("file_count")?;
+            let peers: i64 = row.try_get("peers")?;
+            out.push(crate::dht_radar::store::SavedTorrent {
+                infohash,
+                name: row.try_get("name")?,
+                total_size: total_size.and_then(|value| u64::try_from(value).ok()),
+                file_count: file_count.and_then(|value| u32::try_from(value).ok()),
+                peers: u32::try_from(peers).unwrap_or(u32::MAX),
+                first_seen: row.try_get("first_seen")?,
+                last_seen: row.try_get("last_seen")?,
+            });
+        }
+        Ok(out)
+    }
+
+    /// 存档条数。
+    pub async fn count_dht_radar_torrents(&self) -> Result<u64, DbError> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dht_radar_torrents")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(u64::try_from(count).unwrap_or(0))
+    }
+
+    /// 清空存档，返回删除条数。
+    pub async fn clear_dht_radar_torrents(&self) -> Result<u64, DbError> {
+        let result = sqlx::query("DELETE FROM dht_radar_torrents")
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
     }
 
     /// 比较 revision 并在一个事务中提交全部配置值与下一 revision。
@@ -10150,6 +10258,72 @@ mod tests {
         set_completion(&db, "legacy", 3, "", 0).await;
         db.init_default_config("/tmp").await.expect("restart");
         assert_eq!(load("legacy").await.completed_at, "");
+        close_test_db(&db, dir).await;
+    }
+
+    #[tokio::test]
+    async fn dht_radar_torrents_round_trip() {
+        use crate::dht_radar::store::{SavedTorrent, parse_hex};
+
+        let (db, dir) = open_test_db().await;
+        let first = SavedTorrent {
+            infohash: parse_hex(&"ab".repeat(20)).expect("hash"),
+            name: "debian-12.iso".to_owned(),
+            total_size: Some(3_000_000_000),
+            file_count: Some(1),
+            peers: 3,
+            first_seen: 100,
+            last_seen: 200,
+        };
+        let second = SavedTorrent {
+            infohash: parse_hex(&"cd".repeat(20)).expect("hash"),
+            name: "ubuntu.iso".to_owned(),
+            total_size: None,
+            file_count: None,
+            peers: 1,
+            first_seen: 150,
+            last_seen: 2_000,
+        };
+        db.upsert_dht_radar_torrents(&[first.clone(), second.clone()])
+            .await
+            .expect("insert");
+        assert_eq!(db.count_dht_radar_torrents().await.expect("count"), 2);
+
+        // 重复写同一 infohash：更新名字与时间，`first_seen` 保留最早值。
+        let renamed = SavedTorrent {
+            name: "debian-12.5.iso".to_owned(),
+            total_size: Some(3_100_000_000),
+            file_count: Some(2),
+            peers: 8,
+            first_seen: 999,
+            last_seen: 1_200,
+            ..first.clone()
+        };
+        db.upsert_dht_radar_torrents(&[renamed])
+            .await
+            .expect("update");
+
+        // 按最近观测倒序。
+        let rows = db.load_dht_radar_torrents(10).await.expect("load");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].infohash, second.infohash);
+        assert_eq!(rows[0].name, "ubuntu.iso");
+        let updated = rows
+            .iter()
+            .find(|row| row.infohash == first.infohash)
+            .expect("updated row");
+        assert_eq!(updated.name, "debian-12.5.iso");
+        assert_eq!(updated.total_size, Some(3_100_000_000));
+        assert_eq!(updated.file_count, Some(2));
+        assert_eq!(updated.peers, 8);
+        assert_eq!(updated.first_seen, 100, "首次观测时间不应被覆盖");
+        assert_eq!(updated.last_seen, 1_200);
+
+        // 分页上限生效。
+        assert_eq!(db.load_dht_radar_torrents(1).await.expect("load").len(), 1);
+
+        assert_eq!(db.clear_dht_radar_torrents().await.expect("clear"), 2);
+        assert_eq!(db.count_dht_radar_torrents().await.expect("count"), 0);
         close_test_db(&db, dir).await;
     }
 }

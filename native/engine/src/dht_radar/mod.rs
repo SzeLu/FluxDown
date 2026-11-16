@@ -30,8 +30,10 @@ pub const DEFAULT_CAPACITY: usize = 20_000;
 pub const DEFAULT_NODES: usize = 8;
 /// 虚拟节点数上限：每个节点一个 UDP 端口与 2048 条节点表。
 pub const MAX_NODES: usize = 32;
-/// 元数据抓取并发线程数。
-const METADATA_WORKERS: usize = 4;
+/// 元数据抓取并发线程数。抓取是长连接 IO，线程多一点才能跟上采集速度。
+const METADATA_WORKERS: usize = 16;
+/// 每个 worker 一轮取的候选条数。
+const METADATA_BATCH: usize = 8;
 
 /// 雷达配置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +91,8 @@ pub struct RadarSnapshot {
     pub metadata_failed: u64,
     /// 最近一次收到报文的 Unix 时间（秒），0 表示还没收到过。
     pub last_packet: i64,
+    /// 数据库里已保存的条目数（已解析出名字的历史种子）。
+    pub saved: u64,
     /// 聚合仓库统计。
     pub store: StoreStats,
 }
@@ -118,6 +122,8 @@ pub struct Radar {
     stop: Mutex<Option<Arc<AtomicBool>>>,
     /// 抓元数据时用的本地 peer id（只用于握手，不参与下载）。
     peer_id: [u8; 20],
+    /// 数据库里已保存的条目数（由 daemon 刷库后回填）。
+    saved_rows: AtomicU64,
 }
 
 impl Radar {
@@ -130,6 +136,7 @@ impl Radar {
             running: AtomicBool::new(false),
             stop: Mutex::new(None),
             peer_id: krpc::random_node_id(),
+            saved_rows: AtomicU64::new(0),
         })
     }
 
@@ -264,6 +271,19 @@ impl Radar {
         self.store.query(needle, sort, offset, limit)
     }
 
+    /// 查询一页结果，可只保留已解析出名字的条目。
+    pub fn list_filtered(
+        &self,
+        needle: Option<&str>,
+        sort: Sort,
+        offset: usize,
+        limit: usize,
+        named_only: bool,
+    ) -> (Vec<TorrentEntry>, usize) {
+        self.store
+            .query_filtered(needle, sort, offset, limit, named_only)
+    }
+
     /// 当前统计。
     pub fn snapshot(&self) -> RadarSnapshot {
         RadarSnapshot {
@@ -280,8 +300,37 @@ impl Radar {
             metadata_ok: self.stats.metadata_ok.load(Ordering::Relaxed),
             metadata_failed: self.stats.metadata_failed.load(Ordering::Relaxed),
             last_packet: self.stats.last_packet.load(Ordering::Relaxed),
+            saved: self.saved_rows.load(Ordering::Relaxed),
             store: self.store.stats(),
         }
+    }
+
+    /// 载入数据库里已保存的历史条目（daemon 启动时调用）。
+    pub fn seed_saved(&self, rows: Vec<store::SavedTorrent>) -> usize {
+        let loaded = self.store.seed(rows);
+        self.saved_rows
+            .store(u64::try_from(loaded).unwrap_or(u64::MAX), Ordering::Relaxed);
+        loaded
+    }
+
+    /// 取一批待写库的条目（已解析出名字的）。
+    pub fn take_persist_batch(&self, limit: usize) -> Vec<store::SavedTorrent> {
+        self.store.take_pending_persist(limit)
+    }
+
+    /// 写库失败时把条目放回队列，下一轮再试。
+    pub fn requeue_persist(&self, rows: &[store::SavedTorrent]) {
+        self.store.requeue_persist(rows);
+    }
+
+    /// 回填「数据库里已保存的条目数」。
+    pub fn set_saved_rows(&self, rows: u64) {
+        self.saved_rows.store(rows, Ordering::Relaxed);
+    }
+
+    /// 清空聚合结果与待写队列（`daemon.dht.radar.clear`）。
+    pub fn clear_all(&self) {
+        self.store.clear();
     }
 
     /// 聚合仓库（测试与诊断用）。
@@ -298,7 +347,7 @@ fn metadata_worker(
     peer_id: [u8; 20],
 ) {
     while !stop.load(Ordering::SeqCst) {
-        let candidates = store.metadata_candidates(8);
+        let candidates = store.metadata_candidates(METADATA_BATCH, now_unix());
         if candidates.is_empty() {
             std::thread::sleep(Duration::from_millis(500));
             continue;
@@ -307,16 +356,16 @@ fn metadata_worker(
             if stop.load(Ordering::SeqCst) {
                 return;
             }
-            if !store.begin_metadata(infohash) {
+            if !store.begin_metadata(infohash, now_unix()) {
                 continue;
             }
             match metadata::fetch(&infohash, peer, &peer_id) {
                 Ok(summary) => {
-                    store.set_metadata(infohash, summary);
+                    store.set_metadata(infohash, summary, now_unix());
                     stats.metadata_ok.fetch_add(1, Ordering::Relaxed);
                 }
                 Err(error) => {
-                    store.fail_metadata(infohash);
+                    store.fail_metadata(infohash, now_unix());
                     stats.metadata_failed.fetch_add(1, Ordering::Relaxed);
                     tracing::debug!(%peer, %error, "dht-radar metadata fetch failed");
                 }

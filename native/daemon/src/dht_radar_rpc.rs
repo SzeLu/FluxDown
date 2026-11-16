@@ -6,8 +6,9 @@
 use fluxdown_engine::dht_radar::store::Sort;
 use fluxdown_engine::dht_radar::{RadarConfig, RadarSnapshot};
 use fluxdown_protocol::{
-    ApplicationErrorCode, DhtRadarConfigDto, DhtRadarItemDto, DhtRadarListDto, DhtRadarListParams,
-    DhtRadarSetConfigParams, DhtRadarStatsDto, RpcErrorData, RpcErrorObject, method,
+    ApplicationErrorCode, DhtRadarClearDto, DhtRadarConfigDto, DhtRadarItemDto, DhtRadarListDto,
+    DhtRadarListParams, DhtRadarSetConfigParams, DhtRadarStatsDto, RpcErrorData, RpcErrorObject,
+    method,
 };
 use serde_json::Value;
 
@@ -55,6 +56,7 @@ fn stats_dto(snapshot: RadarSnapshot) -> DhtRadarStatsDto {
         metadata_ok: snapshot.metadata_ok,
         metadata_failed: snapshot.metadata_failed,
         last_packet: snapshot.last_packet,
+        saved: snapshot.saved,
         torrents: snapshot.store.torrents as u64,
         with_metadata: snapshot.store.with_metadata as u64,
     }
@@ -70,11 +72,12 @@ impl DaemonService {
         match method_name {
             method::DAEMON_DHT_RADAR_LIST => {
                 let params = parse_optional_params::<DhtRadarListParams>(params)?;
-                let (items, total) = radar.list(
+                let (items, total) = radar.list_filtered(
                     params.query.as_deref(),
                     Sort::parse(params.sort.as_deref()),
                     params.offset as usize,
                     params.limit.clamp(1, MAX_LIMIT) as usize,
+                    params.named_only,
                 );
                 to_value(DhtRadarListDto {
                     total: total as u64,
@@ -106,6 +109,15 @@ impl DaemonService {
                 })?;
                 self.persist_radar_config(config).await?;
                 to_value(config_dto(radar.config()))
+            }
+            method::DAEMON_DHT_RADAR_CLEAR => {
+                // 先清内存与待写队列，再删库：避免刷库任务把刚清掉的条目又写回来。
+                radar.clear_all();
+                let removed = self.db.clear_dht_radar_torrents().await.map_err(|error| {
+                    internal_error(format!("clear dht radar saved rows failed: {error}"))
+                })?;
+                radar.set_saved_rows(0);
+                to_value(DhtRadarClearDto { removed })
             }
             _ => Err(unavailable()),
         }
@@ -154,10 +166,11 @@ fn item_dto(entry: fluxdown_engine::dht_radar::store::TorrentEntry) -> DhtRadarI
 mod tests {
     use std::sync::Arc;
 
-    use fluxdown_engine::dht_radar::store::MetadataSummary;
+    use fluxdown_engine::dht_radar::store::{MetadataSummary, Sort};
     use fluxdown_engine::dht_radar::{Radar, RadarConfig};
     use fluxdown_protocol::{
-        ApplicationErrorCode, DhtRadarConfigDto, DhtRadarListDto, DhtRadarStatsDto, method,
+        ApplicationErrorCode, DhtRadarClearDto, DhtRadarConfigDto, DhtRadarListDto,
+        DhtRadarStatsDto, method,
     };
     use serde_json::{Value, json};
 
@@ -250,6 +263,10 @@ mod tests {
             .await
             .expect_err("must be unavailable");
         assert_eq!(code(&error), ApplicationErrorCode::Unavailable);
+        let error = call(&fx, method::DAEMON_DHT_RADAR_CLEAR, None)
+            .await
+            .expect_err("must be unavailable");
+        assert_eq!(code(&error), ApplicationErrorCode::Unavailable);
     }
 
     #[tokio::test]
@@ -319,6 +336,7 @@ mod tests {
         assert_eq!(stats.torrents, 1);
         assert_eq!(stats.with_metadata, 0);
         assert_eq!(stats.instances, 1);
+        assert_eq!(stats.saved, 0);
     }
 
     #[tokio::test]
@@ -330,7 +348,7 @@ mod tests {
             Some("1.2.3.4:6881".parse().expect("addr")),
             100,
         );
-        store.begin_metadata([0xabu8; 20]);
+        store.begin_metadata([0xabu8; 20], 100);
         store.set_metadata(
             [0xabu8; 20],
             MetadataSummary {
@@ -338,6 +356,7 @@ mod tests {
                 total_size: Some(1024),
                 file_count: Some(1),
             },
+            100,
         );
         store.observe([0xcdu8; 20], None, 200);
 
@@ -378,5 +397,137 @@ mod tests {
         .expect("list dto");
         assert_eq!(filtered.total, 1);
         assert_eq!(filtered.items[0].name.as_deref(), Some("debian.iso"));
+
+        // 只要已解析出名字的。
+        let named: DhtRadarListDto = serde_json::from_value(
+            call(
+                &fx,
+                method::DAEMON_DHT_RADAR_LIST,
+                Some(json!({ "namedOnly": true })),
+            )
+            .await
+            .expect("list"),
+        )
+        .expect("list dto");
+        assert_eq!(named.total, 1);
+        assert_eq!(named.items[0].name.as_deref(), Some("debian.iso"));
+    }
+
+    #[tokio::test]
+    async fn clear_drops_saved_rows_and_memory() {
+        let fx = fixture(true).await;
+        let store = fx.radar.store();
+        store.observe(
+            [0xabu8; 20],
+            Some("1.2.3.4:6881".parse().expect("addr")),
+            100,
+        );
+        store.set_metadata(
+            [0xabu8; 20],
+            MetadataSummary {
+                name: Some("saved.iso".to_owned()),
+                total_size: Some(10),
+                file_count: Some(1),
+            },
+            100,
+        );
+        // 模拟落库任务：取队列并写库。
+        let rows = fx.radar.take_persist_batch(10);
+        fx.service
+            .db
+            .upsert_dht_radar_torrents(&rows)
+            .await
+            .expect("insert");
+        fx.radar.set_saved_rows(1);
+        assert_eq!(
+            fx.service
+                .db
+                .count_dht_radar_torrents()
+                .await
+                .expect("count"),
+            1
+        );
+
+        let cleared: DhtRadarClearDto = serde_json::from_value(
+            call(&fx, method::DAEMON_DHT_RADAR_CLEAR, None)
+                .await
+                .expect("clear"),
+        )
+        .expect("clear dto");
+        assert_eq!(cleared.removed, 1);
+        assert_eq!(
+            fx.service
+                .db
+                .count_dht_radar_torrents()
+                .await
+                .expect("count"),
+            0
+        );
+
+        // 内存与统计一起归零。
+        let page: DhtRadarListDto = serde_json::from_value(
+            call(&fx, method::DAEMON_DHT_RADAR_LIST, None)
+                .await
+                .expect("list"),
+        )
+        .expect("list dto");
+        assert_eq!(page.total, 0);
+        let stats: DhtRadarStatsDto = serde_json::from_value(
+            call(&fx, method::DAEMON_DHT_RADAR_STATS, None)
+                .await
+                .expect("stats"),
+        )
+        .expect("stats dto");
+        assert_eq!(stats.saved, 0);
+        assert_eq!(stats.torrents, 0);
+    }
+
+    #[tokio::test]
+    async fn saved_names_survive_radar_restart() {
+        let fx = fixture(true).await;
+        // 第一个雷达：解析出名字并落库（模拟刷库任务）。
+        let store = fx.radar.store();
+        store.observe(
+            [0x11u8; 20],
+            Some("1.2.3.4:6881".parse().expect("addr")),
+            100,
+        );
+        store.set_metadata(
+            [0x11u8; 20],
+            MetadataSummary {
+                name: Some("persisted.iso".to_owned()),
+                total_size: Some(4096),
+                file_count: Some(1),
+            },
+            100,
+        );
+        let rows = fx.radar.take_persist_batch(10);
+        fx.service
+            .db
+            .upsert_dht_radar_torrents(&rows)
+            .await
+            .expect("insert");
+
+        // 模拟进程重启：新雷达从库里回填，列表立刻有名字。
+        let restarted = Radar::new(RadarConfig {
+            enabled: false,
+            port: 0,
+            capacity: 64,
+            metadata: false,
+            nodes: 1,
+        });
+        let saved = fx
+            .service
+            .db
+            .load_dht_radar_torrents(64)
+            .await
+            .expect("load");
+        assert_eq!(restarted.seed_saved(saved), 1);
+        let (items, total) = restarted.list(None, Sort::Recent, 0, 10);
+        assert_eq!(total, 1);
+        assert_eq!(items[0].name.as_deref(), Some("persisted.iso"));
+        assert_eq!(items[0].total_size, Some(4096));
+        // 载入的条目不会重复落库。
+        assert!(restarted.take_persist_batch(10).is_empty());
     }
 }

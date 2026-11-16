@@ -18,12 +18,12 @@ use super::store::MetadataSummary;
 const PIECE_SIZE: usize = 16 * 1024;
 /// 元数据体积上限（超过视为异常，直接放弃）。
 const MAX_METADATA_BYTES: usize = 16 * 1024 * 1024;
-/// 建立连接超时。
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+/// 建立连接超时。DHT 里大量 peer 地址已下线，握手阶段快失败才能把并发留给活地址。
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
 /// 单次读写超时。
-const IO_TIMEOUT: Duration = Duration::from_secs(6);
+const IO_TIMEOUT: Duration = Duration::from_secs(4);
 /// 整个抓取流程的时间上限。
-const FETCH_BUDGET: Duration = Duration::from_secs(15);
+const FETCH_BUDGET: Duration = Duration::from_secs(10);
 /// 我们向对端公布的 `ut_metadata` 扩展 ID。
 const OUR_UT_METADATA_ID: u8 = 1;
 /// 扩展协议消息 ID。
@@ -266,13 +266,18 @@ fn read_message(stream: &mut TcpStream) -> Result<Option<(u8, Vec<u8>)>, Metadat
     Ok(Some((frame[1], frame[2..].to_vec())))
 }
 
+/// 展示用名称的最大字符数（超长的多是刻意塞满 `name` 的异常种子）。
+const MAX_NAME_CHARS: usize = 200;
+
 /// 解析 `info` 字典，取出名称、总体积与文件数。
 pub fn summarize(info: &Value) -> MetadataSummary {
+    let files = info.get(b"files").and_then(Value::as_list);
+    // 有些种子不带 `name`（或只有空白），退一步用第一个文件的顶层目录名。
     let name = info
         .get_bytes(b"name.utf-8")
         .or_else(|| info.get_bytes(b"name"))
-        .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
-        .filter(|text| !text.is_empty());
+        .and_then(clean_name)
+        .or_else(|| files.and_then(first_path_head).and_then(clean_name));
     if let Some(length) = info.get_int(b"length") {
         return MetadataSummary {
             name,
@@ -280,7 +285,6 @@ pub fn summarize(info: &Value) -> MetadataSummary {
             file_count: Some(1),
         };
     }
-    let files = info.get(b"files").and_then(Value::as_list);
     let Some(files) = files else {
         return MetadataSummary {
             name,
@@ -298,4 +302,40 @@ pub fn summarize(info: &Value) -> MetadataSummary {
         total_size: (total > 0).then_some(total),
         file_count: u32::try_from(files.len()).ok(),
     }
+}
+
+/// 第一个文件路径的第一段（多文件种子的顶层目录名）。
+fn first_path_head(files: &[Value]) -> Option<&[u8]> {
+    let file = files.first()?;
+    file.get(b"path.utf-8")
+        .or_else(|| file.get(b"path"))
+        .and_then(Value::as_list)?
+        .first()?
+        .as_bytes()
+}
+
+/// 把元数据里的原始名字清成可展示的一行：控制字符与多余空白折叠，超长截断。
+fn clean_name(raw: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(raw);
+    let mut out = String::with_capacity(text.len().min(MAX_NAME_CHARS * 4));
+    let mut chars = 0usize;
+    let mut pending_space = false;
+    for ch in text.chars() {
+        if ch.is_whitespace() || ch.is_control() {
+            pending_space = !out.is_empty();
+            continue;
+        }
+        if chars >= MAX_NAME_CHARS {
+            break;
+        }
+        if pending_space {
+            out.push(' ');
+            pending_space = false;
+            chars += 1;
+        }
+        out.push(ch);
+        chars += 1;
+    }
+    let trimmed = out.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }

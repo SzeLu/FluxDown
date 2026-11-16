@@ -4047,5 +4047,11 @@
   "dhtRadarEmpty": "No torrents yet. Start scanning and the list fills up as DHT traffic arrives.",
   "dhtRadarLoading": "Loading…",
   "dhtRadarLoadFailed": "Failed to load; check the daemon connection",
-  "dhtRadarShown": "Showing"
+  "dhtRadarShown": "Showing",
+  "dhtRadarSaved": "Saved",
+  "dhtRadarClear": "Clear history",
+  "dhtRadarClearConfirm": "Confirm clear",
+  "dhtRadarClearHint": "Click \"Confirm clear\" again to delete the saved resources",
+  "dhtRadarCleared": "Saved history cleared",
+  "dhtRadarOnlyNamed": "Named only"
 }

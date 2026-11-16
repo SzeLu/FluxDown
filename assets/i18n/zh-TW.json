@@ -4047,5 +4047,11 @@
   "dhtRadarEmpty": "还没有采集到种子。开启采集后，列表会随着 DHT 报文陆续出现。",
   "dhtRadarLoading": "加载中…",
   "dhtRadarLoadFailed": "读取失败，请确认 daemon 已连接",
-  "dhtRadarShown": "显示"
+  "dhtRadarShown": "显示",
+  "dhtRadarSaved": "已保存",
+  "dhtRadarClear": "清空历史",
+  "dhtRadarClearConfirm": "确认清空",
+  "dhtRadarClearHint": "再点一次「确认清空」会删除已保存的历史资源",
+  "dhtRadarCleared": "已清空历史存档",
+  "dhtRadarOnlyNamed": "仅有名字"
 }

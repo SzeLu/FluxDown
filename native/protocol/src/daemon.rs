@@ -4539,6 +4539,9 @@ pub struct DhtRadarListParams {
     pub offset: u32,
     #[serde(default = "default_radar_limit")]
     pub limit: u32,
+    /// 只返回已解析出名字的条目。
+    #[serde(default)]
+    pub named_only: bool,
 }
 
 fn default_radar_limit() -> u32 {
@@ -4614,6 +4617,8 @@ pub struct DhtRadarStatsDto {
     pub metadata_failed: u64,
     /// 最近一次收到报文的 Unix 时间；0 = 还没收到过。
     pub last_packet: i64,
+    /// 已保存到数据库的种子数（解析出名字的历史资源）。
+    pub saved: u64,
     /// 当前保留的种子数。
     pub torrents: u64,
     /// 其中已有元数据的数量。
@@ -4652,4 +4657,13 @@ pub struct DhtRadarSetConfigParams {
     pub metadata: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nodes: Option<u32>,
+}
+
+/// `daemon.dht.radar.clear` 结果。
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DhtRadarClearDto {
+    /// 被删除的存档条数。
+    pub removed: u64,
 }

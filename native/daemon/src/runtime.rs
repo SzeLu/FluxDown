@@ -315,6 +315,19 @@ pub async fn run_with(
                 .unwrap_or(fluxdown_engine::dht_radar::DEFAULT_NODES),
         };
         let radar = fluxdown_engine::dht_radar::Radar::new(config);
+        // 回填历史存档：重启后列表立刻能看到之前解析出名字的资源。
+        match service_db.load_dht_radar_torrents(config.capacity).await {
+            Ok(rows) => {
+                let loaded = radar.seed_saved(rows);
+                if loaded > 0 {
+                    tracing::info!(loaded, "dht radar restored saved torrents");
+                }
+            }
+            Err(error) => tracing::warn!(%error, "dht radar load saved torrents failed"),
+        }
+        if let Ok(count) = service_db.count_dht_radar_torrents().await {
+            radar.set_saved_rows(count);
+        }
         if config.enabled
             && let Err(error) = radar.start()
         {
@@ -322,6 +335,7 @@ pub async fn run_with(
         }
         radar
     };
+    spawn_dht_radar_persist(Arc::clone(&dht_radar), service_db.clone(), cancel.clone());
 
     let token =
         load_or_create_token(&data_dir, process_config.token_file_override.as_deref()).await?;
@@ -889,6 +903,47 @@ fn usize_config(config: &HashMap<String, String>, key: &str, fallback: usize) ->
         .get(key)
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(fallback)
+}
+
+/// DHT 雷达落库任务：把「已解析出名字」的条目定期写进数据库。
+///
+/// 采集线程是同步的，不能直接 await 数据库；这里用「队列 + 定时批量刷」解耦：
+/// 引擎只把待写条目排进内存队列，本任务每几秒取一批落库。写失败就放回队列，
+/// 下一轮再试（upsert 幂等，重复写没有副作用）。
+fn spawn_dht_radar_persist(
+    radar: Arc<fluxdown_engine::dht_radar::Radar>,
+    db: Db,
+    cancel: CancellationToken,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(3));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => return,
+                _ = interval.tick() => {}
+            }
+            let rows = radar.take_persist_batch(500);
+            if rows.is_empty() {
+                continue;
+            }
+            match db.upsert_dht_radar_torrents(&rows).await {
+                Ok(()) => {
+                    if let Ok(count) = db.count_dht_radar_torrents().await {
+                        radar.set_saved_rows(count);
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        count = rows.len(),
+                        "dht radar persist failed; requeueing"
+                    );
+                    radar.requeue_persist(&rows);
+                }
+            }
+        }
+    })
 }
 
 fn spawn_blob_sweeper(

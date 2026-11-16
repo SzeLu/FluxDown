@@ -7,8 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fluxdown_protocol::{
-    CreateTaskRequest, DaemonCreateTaskParams, DhtRadarConfigDto, DhtRadarItemDto, DhtRadarListDto,
-    DhtRadarListParams, DhtRadarSetConfigParams, DhtRadarStatsDto, method,
+    CreateTaskRequest, DaemonCreateTaskParams, DhtRadarClearDto, DhtRadarConfigDto,
+    DhtRadarItemDto, DhtRadarListDto, DhtRadarListParams, DhtRadarSetConfigParams,
+    DhtRadarStatsDto, method,
 };
 use fluxdown_ui_components::{ButtonVariant, card, loading_button};
 use fluxdown_ui_i18n::Translator;
@@ -74,6 +75,10 @@ pub(crate) struct DhtRadarView {
     notice: Option<SharedString>,
     /// 最近一次请求的令牌：旧响应直接丢弃。
     request: u64,
+    /// 清空存档的二次确认：第一次点击只切到「确认清空」。
+    confirm_clear: bool,
+    /// 只显示已解析出名字的条目。
+    only_named: bool,
 }
 
 impl DhtRadarView {
@@ -96,6 +101,8 @@ impl DhtRadarView {
             busy: false,
             notice: None,
             request: 0,
+            confirm_clear: false,
+            only_named: false,
         };
         view.refresh(cx);
         view.start_polling(cx);
@@ -129,6 +136,7 @@ impl DhtRadarView {
             sort: Some(self.sort.as_str().to_owned()),
             offset: 0,
             limit: PAGE_LIMIT,
+            named_only: self.only_named,
         };
         self.loading = true;
         cx.notify();
@@ -180,6 +188,11 @@ impl DhtRadarView {
             self.config = Some(config);
         }
         cx.notify();
+    }
+
+    fn toggle_only_named(&mut self, cx: &mut Context<Self>) {
+        self.only_named = !self.only_named;
+        self.refresh(cx);
     }
 
     fn set_sort(&mut self, sort: Sort, cx: &mut Context<Self>) {
@@ -299,6 +312,49 @@ impl DhtRadarView {
         cx.notify();
     }
 
+    /// 清空已保存的存档与当前列表：第一次点击进入确认态，再点一次才真正删除。
+    fn clear_saved(&mut self, cx: &mut Context<Self>) {
+        if self.busy {
+            return;
+        }
+        if !self.confirm_clear {
+            self.confirm_clear = true;
+            self.notice = Some(self.t("dhtRadarClearHint"));
+            cx.notify();
+            return;
+        }
+        self.confirm_clear = false;
+        self.busy = true;
+        self.notice = None;
+        cx.notify();
+        let client = Arc::clone(&self.client);
+        cx.spawn(async move |this, cx| {
+            let result = client
+                .call::<Value, DhtRadarClearDto>(method::DAEMON_DHT_RADAR_CLEAR, None)
+                .await;
+            drop(this.update(cx, |this, cx| {
+                this.busy = false;
+                match result {
+                    Ok(cleared) => {
+                        this.items.clear();
+                        this.total = 0;
+                        this.notice = Some(SharedString::from(format!(
+                            "{} ({})",
+                            this.t("dhtRadarCleared"),
+                            cleared.removed
+                        )));
+                        this.refresh(cx);
+                    }
+                    Err(_) => {
+                        this.notice = Some(this.t("dhtRadarActionFailed"));
+                        cx.notify();
+                    }
+                }
+            }));
+        })
+        .detach();
+    }
+
     /// 顶部统计条：运行状态 + 节点 / 种子 / 报文。
     fn stats_line(&self, cx: &App) -> Div {
         let tokens = active_theme(cx).tokens().clone();
@@ -324,6 +380,11 @@ impl DhtRadarView {
                 "{}: {}",
                 self.translator.text("dhtRadarWithMetadata"),
                 stats.with_metadata
+            )));
+            parts.push(SharedString::from(format!(
+                "{}: {}",
+                self.translator.text("dhtRadarSaved"),
+                stats.saved
             )));
             if stats.port > 0 {
                 parts.push(SharedString::from(format!("UDP: {}", stats.port)));
@@ -399,6 +460,23 @@ impl DhtRadarView {
                 )
                 .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.refresh(cx))),
             );
+        // 有存档时才显示：清空是不可撤销的写操作，放在次要按钮位并要二次确认。
+        if self.stats.as_ref().is_some_and(|stats| stats.saved > 0) {
+            bar = bar.child(
+                loading_button(
+                    "dht-radar-clear",
+                    self.t(if self.confirm_clear {
+                        "dhtRadarClearConfirm"
+                    } else {
+                        "dhtRadarClear"
+                    }),
+                    ButtonVariant::Secondary,
+                    self.busy,
+                    cx,
+                )
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.clear_saved(cx))),
+            );
+        }
         for sort in Sort::ALL {
             let selected = self.sort == sort;
             bar = bar.child(
@@ -422,6 +500,25 @@ impl DhtRadarView {
                     ),
             );
         }
+        let named_selected = self.only_named;
+        bar = bar.child(
+            div()
+                .id("dht-radar-only-named")
+                .px(tokens.spacing.sm)
+                .py(px(4.))
+                .rounded(tokens.radius.sm)
+                .cursor_pointer()
+                .text_size(tokens.typography.sm.size)
+                .when(named_selected, |chip| {
+                    chip.bg(tokens.colors.primary.opacity(0.14))
+                        .text_color(tokens.colors.primary)
+                })
+                .when(!named_selected, |chip| {
+                    chip.text_color(active_theme(cx).extended().colors.text_tertiary)
+                })
+                .child(self.t("dhtRadarOnlyNamed"))
+                .on_click(cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_only_named(cx))),
+        );
         if let Some(notice) = self.notice.clone() {
             bar = bar.child(
                 div()

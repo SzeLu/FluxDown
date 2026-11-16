@@ -34,9 +34,11 @@ const REPLY_NODES: usize = 8;
 /// 每次维护向多少个节点发 `find_node`。
 const EXPAND_PER_TICK: usize = 6;
 /// 每次维护向多少个节点发 `get_peers`（针对已知 infohash）。
-const SAMPLE_PER_TICK: usize = 4;
+const SAMPLE_PER_TICK: usize = 20;
 /// 每次维护向多少个节点发 `sample_infohashes`（BEP 51）——主动索引的主要来源。
 const SAMPLE_HASHES_PER_TICK: usize = 3;
+/// 为单个 infohash 找 peer 时，问几个距离最近的节点。
+const GET_PEERS_FANOUT: usize = 4;
 /// 应答别人 `sample_infohashes` 时最多返回的样本数。
 const SAMPLE_HASHES_REPLY: usize = 50;
 /// 单次读取的报文上限。
@@ -148,8 +150,8 @@ impl Crawler {
         }
         // BEP 51 只给 infohash、不给 peer。对还没有 peer 的条目做一次小范围查找：
         // 问节点表里距离该 infohash 最近的几个节点，命中率远高于随机节点。
-        for infohash in self.store.peerless_pending(SAMPLE_PER_TICK) {
-            for address in self.closest_addresses(&infohash, 3) {
+        for infohash in self.store.peerless_pending(SAMPLE_PER_TICK, now_unix()) {
+            for address in self.closest_addresses(&infohash, GET_PEERS_FANOUT) {
                 if let Err(error) = self.send_get_peers(address, &infohash) {
                     tracing::debug!(%error, "dht-radar get_peers send failed");
                 }
