@@ -59,8 +59,15 @@ pub type PortFuture<T> = Pin<Box<dyn Future<Output = Result<T, RpcErrorData>> + 
 /// 插件界面访问 agent 的端口（由 app 注入统一 agent client）。
 pub trait PluginUiPort: Send + Sync {
     fn call(&self, method: String, params: serde_json::Value) -> PortFuture<serde_json::Value>;
+    fn image(&self, _session: String, _id: String) -> PortFuture<Vec<u8>> {
+        Box::pin(async {
+            Err(RpcErrorData::new(
+                fluxdown_protocol::ApplicationErrorCode::Unsupported,
+                false,
+            ))
+        })
+    }
 }
-
 #[derive(Debug, thiserror::Error)]
 pub enum PluginUiError {
     #[error("plugin UI component catalog failed: {0}")]
@@ -168,6 +175,8 @@ pub fn init(
 
 /// 设置界面语言来源（`fluxdown.locale()`）。
 pub fn set_translator(cx: &mut App, translator: Entity<Translator>) {
+    cx.observe(&translator, |_, cx| refresh_script_views(cx))
+        .detach();
     if let Some(host) = host_mut(cx) {
         host.translator = Some(translator);
     }
@@ -187,14 +196,21 @@ pub fn on_theme_changed(cx: &mut App) {
         return;
     };
     host.theme_revision = host.theme_revision.wrapping_add(1);
-    host.views.retain(|view| view.upgrade().is_some());
-    let views: Vec<_> = host.views.iter().filter_map(WeakEntity::upgrade).collect();
     let listeners = host.theme_listeners.clone();
-    for view in views {
-        view.update(cx, |view, cx| view.refresh(cx));
-    }
+    refresh_script_views(cx);
     for listener in listeners {
         listener(cx);
+    }
+}
+
+fn refresh_script_views(cx: &mut App) {
+    let Some(host) = host_mut(cx) else {
+        return;
+    };
+    host.views.retain(|view| view.upgrade().is_some());
+    let views: Vec<_> = host.views.iter().filter_map(WeakEntity::upgrade).collect();
+    for view in views {
+        view.update(cx, |view, cx| view.refresh(cx));
     }
 }
 

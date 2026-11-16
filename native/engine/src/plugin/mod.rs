@@ -36,6 +36,7 @@ pub mod consent;
 #[cfg(test)]
 mod consent_tests;
 pub mod dependencies;
+pub mod images;
 pub mod install;
 pub mod manager;
 pub mod manifest;
@@ -48,6 +49,7 @@ pub mod quickjs;
 pub mod quickjs_host;
 pub mod runtime;
 pub mod semver;
+mod setting_localization;
 pub mod sniff_pack;
 mod tool_path;
 pub use manager::routing;

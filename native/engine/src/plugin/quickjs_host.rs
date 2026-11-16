@@ -264,6 +264,10 @@ fn encode(call: &HostCall) -> Result<(&'static str, String), PluginError> {
         HostCall::ViewRefresh { session } => {
             ("viewRefresh", serde_json::json!({ "session": session }))
         }
+        HostCall::ViewLocale { session, locale } => (
+            "viewLocale",
+            serde_json::json!({ "session": session, "locale": locale }),
+        ),
         HostCall::ViewClose { session } => ("viewClose", serde_json::json!({ "session": session })),
         HostCall::Command { id, task_ids } => (
             "command",
@@ -294,7 +298,7 @@ fn encode(call: &HostCall) -> Result<(&'static str, String), PluginError> {
 /// 按调用种类把 JS 返回值映射为 [`HostReply`]。
 fn decode(kind: &str, value: serde_json::Value, started: StartedTasks) -> HostReply {
     match kind {
-        "viewOpen" | "viewEvent" | "viewRefresh" => HostReply::Tree(value),
+        "viewOpen" | "viewEvent" | "viewRefresh" | "viewLocale" => HostReply::Tree(value),
         "invoke" => HostReply::Value { value, started },
         _ => HostReply::None,
     }
@@ -401,6 +405,57 @@ fn inject_host_bridge(
 ) -> Result<(), rquickjs::Error> {
     let globals = ctx.globals();
 
+    {
+        let ev = events.clone();
+        let pid = identity.to_string();
+        let dl = interrupt_ns.clone();
+        let f = Function::new(
+            ctx.clone(),
+            Async(move |session: String, options_json: String| {
+                let ev = ev.clone();
+                let pid = pid.clone();
+                let dl = dl.clone();
+                async move {
+                    let result = match serde_json::from_str(&options_json) {
+                        Ok(options) => credited(&dl, ev.image_load(&pid, &session, options)).await,
+                        Err(error) => Err(PluginError::InvalidOutput(format!(
+                            "invalid image options: {error}"
+                        ))),
+                    };
+                    let payload = match result {
+                        Ok(src) => serde_json::json!({ "value": src }),
+                        Err(error) => serde_json::json!({ "__fluxError": plain_error(&error) }),
+                    };
+                    Ok::<String, rquickjs::Error>(payload.to_string())
+                }
+            }),
+        )?
+        .with_name("__flux_image_load")?;
+        globals.set("__flux_image_load", f)?;
+    }
+    {
+        let ev = events.clone();
+        let pid = identity.to_string();
+        let dl = interrupt_ns.clone();
+        let f = Function::new(
+            ctx.clone(),
+            Async(move |session: String, src: String| {
+                let ev = ev.clone();
+                let pid = pid.clone();
+                let dl = dl.clone();
+                async move {
+                    let result = credited(&dl, ev.image_release(&pid, &session, &src)).await;
+                    let payload = match result {
+                        Ok(()) => serde_json::json!({ "value": null }),
+                        Err(error) => serde_json::json!({ "__fluxError": plain_error(&error) }),
+                    };
+                    Ok::<String, rquickjs::Error>(payload.to_string())
+                }
+            }),
+        )?
+        .with_name("__flux_image_release")?;
+        globals.set("__flux_image_release", f)?;
+    }
     // __flux_view_refresh(session) -> ()
     {
         let ev = events.clone();
@@ -696,6 +751,29 @@ const HOST_PRELUDE: &str = r#"
   };
 
   flux.ui = ui;
+  flux.images = Object.freeze({
+    load(options) {
+      const { session, ...request } = options || {};
+      if (typeof session !== 'string' || !sessions.has(session)) {
+        return Promise.reject(new Error('images.load requires an active view session'));
+      }
+      return __flux_image_load(session, JSON.stringify(request)).then((raw) => {
+        const r = JSON.parse(raw);
+        if (r.__fluxError) throw new Error(r.__fluxError);
+        return r.value;
+      });
+    },
+    release(options) {
+      const { session, src } = options || {};
+      if (typeof session !== 'string' || !sessions.has(session) || typeof src !== 'string') {
+        return Promise.reject(new Error('images.release requires an active view session and resource reference'));
+      }
+      return __flux_image_release(session, src).then((raw) => {
+        const r = JSON.parse(raw);
+        if (r.__fluxError) throw new Error(r.__fluxError);
+      });
+    },
+  });
   flux.commands = {
     register(id, fn) {
       if (typeof id !== 'string' || typeof fn !== 'function') throw new TypeError('commands.register(id, fn)');
@@ -774,6 +852,10 @@ const HOST_PRELUDE: &str = r#"
     props: props || {},
     taskId: taskId === undefined ? null : taskId,
     locale: locale || '',
+    images: Object.freeze({
+      load: (options) => flux.images.load(Object.assign({}, options, { session })),
+      release: (src) => flux.images.release({ session, src }),
+    }),
     refresh() { __flux_view_refresh(session); },
     close() {
       if (s.closing) return;
@@ -828,6 +910,11 @@ const HOST_PRELUDE: &str = r#"
     },
     async viewRefresh(a) {
       return await renderSession(sessionOf(a.session));
+    },
+    async viewLocale(a) {
+      const s = sessionOf(a.session);
+      s.ctx.locale = a.locale;
+      return await renderSession(s);
     },
     async viewClose(a) {
       const s = sessions.get(a.session);

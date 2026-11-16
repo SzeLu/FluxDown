@@ -14,7 +14,7 @@
 //! （`packages/plugin-sdk/src/manifest.ts::validatePackage`）做准入，市场收录的包必须能在客户端
 //! 安装：改字段、权限、事件、设置矩阵或安装限制时同步 SDK 并发版，索引仓自动同步。
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -73,6 +73,21 @@ pub struct SettingOption {
     pub label: String,
 }
 
+/// Optional display-text overrides for one client locale; setting values never change.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SettingLocalization {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub helper_label: Option<String>,
+    /// Existing option value → translated label.
+    #[serde(default)]
+    pub options: BTreeMap<String, String>,
+}
+
 /// 声明式设置项。engine 侧唯一校验语义源。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -111,6 +126,9 @@ pub struct SettingField {
     /// 辅助脚本按钮文案（空则宿主用默认文案「复制获取脚本」）。
     #[serde(default)]
     pub helper_label: Option<String>,
+    /// Client-local display text; absent translations fall back to the original text.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub localizations: BTreeMap<String, SettingLocalization>,
 }
 
 impl SettingField {
@@ -230,6 +248,9 @@ pub struct MainDecl {
     /// 是否随 daemon 启动常驻（需 `background` 权限）。
     #[serde(default)]
     pub background: bool,
+    /// `flux.images.load` 可请求的来源主机；并入用户授权的网络主机集合。
+    #[serde(default)]
+    pub image_hosts: Vec<String>,
 }
 
 /// 视图放置位置。
@@ -792,14 +813,19 @@ impl PluginManifest {
         }
     }
 
-    /// 所有 view `desktop.networkHosts` 的排序去重并集。
+    /// `main.imageHosts`、view `desktop.networkHosts` 与 archive update 主机的排序去重并集。
     pub fn network_hosts(&self) -> Vec<String> {
         let mut hosts: Vec<String> = self
-            .contributes
+            .main
             .iter()
-            .flat_map(|c| c.views.iter())
-            .filter_map(|v| v.desktop.as_ref())
-            .flat_map(|d| d.network_hosts.iter().cloned())
+            .flat_map(|main| main.image_hosts.iter().cloned())
+            .chain(
+                self.contributes
+                    .iter()
+                    .flat_map(|c| c.views.iter())
+                    .filter_map(|v| v.desktop.as_ref())
+                    .flat_map(|d| d.network_hosts.iter().cloned()),
+            )
             .chain(
                 self.contributes
                     .iter()
@@ -905,7 +931,19 @@ fn validate_main(m: &PluginManifest) -> Result<(), PluginError> {
         }
     }
     if main.background && !m.has_permission(PERMISSION_BACKGROUND) {
-        return manifest_err("main.background 为 true 时 permissions 必须包含 background".into());
+        return manifest_err("main.background requires the background permission".to_owned());
+    }
+    if main.image_hosts.len() > NETWORK_HOSTS_MAX {
+        return manifest_err(format!("main.imageHosts 至多 {NETWORK_HOSTS_MAX} 项"));
+    }
+    let mut seen: HashSet<&str> = HashSet::new();
+    for host in &main.image_hosts {
+        if !is_valid_network_host(host) {
+            return manifest_err(format!("main.imageHosts '{host}' 非法"));
+        }
+        if !seen.insert(host.as_str()) {
+            return manifest_err(format!("main.imageHosts '{host}' 重复"));
+        }
     }
     Ok(())
 }
@@ -1427,6 +1465,7 @@ pub fn validate_setting_field(f: &SettingField) -> Result<(), PluginError> {
             f.key
         ));
     }
+    super::setting_localization::validate(f)?;
 
     // number default 必须能解析为数字，且落在 min/max 闭区间。
     if t == SettingType::Number
@@ -1513,10 +1552,7 @@ pub fn is_safe_relative_path(p: &str) -> bool {
         }
     }
     // 禁控制字符。
-    if p.chars().any(|c| c.is_control()) {
-        return false;
-    }
-    true
+    !p.chars().any(char::is_control)
 }
 
 /// URL glob 匹配：`*` 是唯一通配符，按 `*` 分段顺序子串匹配（首段前缀锚定、尾段后缀

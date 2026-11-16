@@ -245,7 +245,7 @@ function checkMain(errors: string[], manifest: Obj, files: Files, permissions: u
   const main = manifest.main;
   if (main === undefined || main === null) return;
   if (!isObject(main)) return void errors.push("main 须为对象");
-  unknownKeys(errors, "main", main, ["entry", "events", "background"]);
+  unknownKeys(errors, "main", main, ["entry", "events", "background", "imageHosts"]);
   if (!isSafeRelativePath(main.entry)) {
     errors.push(`main entry 路径 '${String(main.entry)}' 非法`);
   } else {
@@ -265,6 +265,17 @@ function checkMain(errors: string[], manifest: Obj, files: Files, permissions: u
     errors.push("main.background 须为布尔");
   } else if (main.background === true && !hasPermission(permissions, "background")) {
     errors.push("main.background 为 true 时 permissions 必须包含 background");
+  }
+  const imageHosts = main.imageHosts ?? [];
+  if (!Array.isArray(imageHosts)) errors.push("main.imageHosts 须为数组");
+  else {
+    if (imageHosts.length > NETWORK_HOSTS_MAX) errors.push(`main.imageHosts 至多 ${NETWORK_HOSTS_MAX} 项`);
+    const seen = new Set<string>();
+    for (const host of imageHosts) {
+      if (!isValidNetworkHost(host)) errors.push(`main.imageHosts '${String(host)}' 非法`);
+      else if (seen.has(host)) errors.push(`main.imageHosts '${host}' 重复`);
+      else seen.add(host);
+    }
   }
 }
 
@@ -564,8 +575,9 @@ function checkSetting(errors: string[], field: unknown, seen: Set<string>) {
   const where = `setting '${String(key)}'`;
   unknownKeys(errors, where, field, [
     "key", "title", "description", "type", "widget", "options", "default", "required",
-    "min", "max", "pattern", "helperScript", "helperLabel",
+    "min", "max", "pattern", "helperScript", "helperLabel", "localizations",
   ]);
+  checkSettingLocalizations(errors, field, where);
   if (!nonEmptyString(key)) errors.push("setting key 不可为空");
   else if (seen.has(key)) errors.push(`setting key '${key}' 重复`);
   else seen.add(key);
@@ -651,6 +663,51 @@ function checkSetting(errors: string[], field: unknown, seen: Set<string>) {
   }
 }
 
+const SETTING_LOCALIZATION_FIELDS = ["title", "description", "helperLabel"] as const;
+function checkSettingLocalizations(errors: string[], field: Obj, where: string) {
+  const raw = field.localizations;
+  if (raw === undefined) return;
+  if (!isObject(raw)) return void errors.push(`${where}: localizations 须为对象`);
+  const locales = Object.keys(raw);
+  if (locales.length > 64) errors.push(`${where}: localizations 最多 64 种语言`);
+  const seen = new Set<string>();
+  for (const locale of locales) {
+    const value = raw[locale];
+    if (!/^[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*$/.test(locale)) {
+      errors.push(`${where}: localization locale '${locale}' 非法`);
+    }
+    const normalized = locale.toLowerCase();
+    if (seen.has(normalized)) errors.push(`${where}: localization locale '${locale}' 重复`);
+    seen.add(normalized);
+    if (!isObject(value)) {
+      errors.push(`${where}: localization '${locale}' 须为对象`);
+      continue;
+    }
+    unknownKeys(errors, `${where} localization '${locale}'`, value, [...SETTING_LOCALIZATION_FIELDS, "options"]);
+    for (const key of SETTING_LOCALIZATION_FIELDS) {
+      const text = value[key];
+      if (text !== undefined && text !== null && (typeof text !== "string" || charLength(text) > 4096)) {
+        errors.push(`${where}: localization '${locale}' ${key} 须为 ≤4096 字符的字符串`);
+      }
+    }
+    if (value.helperLabel !== undefined && value.helperLabel !== null && field.helperScript == null) {
+      errors.push(`${where}: localization '${locale}' helperLabel 须与 helperScript 同时出现`);
+    }
+    if (value.options !== undefined) {
+      if (!isObject(value.options)) errors.push(`${where}: localization '${locale}' options 须为对象`);
+      else {
+        const options = Array.isArray(field.options) ? field.options : [];
+        const values = new Set(options.filter(isObject).map((o) => o.value));
+        for (const [option, label] of Object.entries(value.options)) {
+          if (!values.has(option)) errors.push(`${where}: localization '${locale}' 未知 option value '${option}'`);
+          if (typeof label !== "string" || charLength(label) > 4096) {
+            errors.push(`${where}: localization '${locale}' option '${option}' 须为 ≤4096 字符的字符串`);
+          }
+        }
+      }
+    }
+  }
+}
 function utf8Length(s: string): number {
   let n = 0;
   for (const ch of s) {
@@ -834,14 +891,16 @@ export function riskOf(manifest: { permissions?: readonly string[] | null }): Pl
   return permissions.some((p) => elevated.includes(p)) ? "elevated" : "standard";
 }
 
-/** Sorted, de-duplicated union of desktop hosts and archive rule update URL hosts. */
+/** Sorted, de-duplicated union of main image, desktop and archive rule update URL hosts. */
 export function networkHostsOf(manifest: {
+  main?: { imageHosts?: readonly string[] | null } | null;
   contributes?: {
     views?: readonly { desktop?: { networkHosts?: readonly string[] | null } | null }[] | null;
     archiveRules?: { updateUrl?: string | null } | null;
   } | null;
 }): string[] {
   const hosts = new Set<string>();
+  for (const host of manifest.main?.imageHosts ?? []) hosts.add(host);
   for (const view of manifest.contributes?.views ?? []) {
     for (const host of view.desktop?.networkHosts ?? []) hosts.add(host);
   }

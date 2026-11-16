@@ -781,18 +781,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "attohttpc"
-version = "0.30.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16e2cdb6d5ed835199484bb92bb8b3edd526effe995c61732580439c1a67e2e9"
-dependencies = [
- "base64 0.22.1",
- "http",
- "log",
- "url",
-]
-
-[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3392,6 +3380,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "file-format"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55d9ccda37e95b4f0978a3074b4a9939979103a7256459cfb449c9c84d1adf23"
+
+[[package]]
 name = "filedescriptor"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3531,6 +3525,8 @@ dependencies = [
  "objc2-user-notifications",
  "regex",
  "reqwest 0.12.28",
+ "rustls",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3545,6 +3541,7 @@ dependencies = [
  "tracing-subscriber",
  "tray-icon",
  "uuid",
+ "webpki-roots 1.0.11",
  "windows 0.61.3",
  "windows-sys 0.59.0",
  "winreg 0.55.0",
@@ -3628,6 +3625,7 @@ dependencies = [
  "ed25519-dalek",
  "encoding_rs",
  "feed-rs",
+ "file-format",
  "flate2",
  "fluxdown_logfile",
  "fs2",
@@ -3636,9 +3634,10 @@ dependencies = [
  "hmac 0.12.1",
  "http",
  "if-addrs",
- "igd-next",
+ "image",
  "libc",
  "librqbit",
+ "librqbit-upnp",
  "m3u8-rs",
  "md-5 0.10.6",
  "md4",
@@ -3648,6 +3647,8 @@ dependencies = [
  "rand 0.9.5",
  "regex",
  "reqwest 0.12.28",
+ "rustls",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "sha1 0.10.7",
@@ -3659,9 +3660,9 @@ dependencies = [
  "tokio-util",
  "tracing",
  "tracing-subscriber",
- "ts2mp4",
  "url",
  "uuid",
+ "webpki-roots 1.0.11",
  "windows-sys 0.59.0",
  "winreg 0.55.0",
  "zip",
@@ -3791,11 +3792,13 @@ dependencies = [
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
  "tokio-tungstenite",
+ "windows 0.62.2",
  "winresource",
 ]
 
@@ -3803,7 +3806,6 @@ dependencies = [
 name = "fluxdown_ui_command_palette"
 version = "0.1.0"
 dependencies = [
- "fluxdown_ui_components",
  "fluxdown_ui_i18n",
  "fluxdown_ui_theme",
  "gpui-base",
@@ -4693,7 +4695,7 @@ dependencies = [
  "log",
  "presser",
  "thiserror 2.0.21",
- "windows 0.62.2",
+ "windows 0.58.0",
 ]
 
 [[package]]
@@ -4802,9 +4804,9 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8c3a7e25e5a4789656da980b0316857acbdb72347b5d890d7d0c549bb9fee72"
+checksum = "a069272b90d908d15152711b38153edabcf67a5dcc490123197af7fd9ad78d9d"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -4874,9 +4876,9 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-apple"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d1934376409ef93257473cfd1cba16bbc825a3a3afc437410de73208cfd8364"
+checksum = "94395e1c8cc1e0795d3bac933d8701582eb3e6b274db09919dca24eab379d801"
 dependencies = [
  "anyhow",
  "async-task",
@@ -4914,9 +4916,9 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-linux"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0409042721bd50ed8c538e13cb13f6d92f5adeade2e2a284a41d32c704c2eef1"
+checksum = "a92c93a4828b4d54f47bad288950da47f2fbaa51bd8b845ac5ef14d86c5f7c8e"
 dependencies = [
  "accesskit",
  "accesskit_unix",
@@ -4959,9 +4961,9 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-macos"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "192b5731d190f840ad7868d1bb8c1c1fe70007a747cc8d2f60700699ca4318e0"
+checksum = "a33d8962910c761956b806a318f8ae4d2b582066cc440a6be3502ddaaa1272cb"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -5000,9 +5002,9 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-macros"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "269fc24ab55f85d5fb90ce812b3e6adcf5ad0bdccc79a08aa9ddd88a3a477494"
+checksum = "2e545c497ffdad0afd840525e45707d522ab35d88f231d8f657ae1b331089d3b"
 dependencies = [
  "heck 0.5.0",
  "proc-macro2",
@@ -5012,9 +5014,9 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-platform"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df86a665111fb86fe149c6d72660777d17bcf2af9133079459faf7bda0b3f756"
+checksum = "27afaeacefaeeb7b3c509a6447375afa13dbf17f9fa4a99c534d6bad59b48b47"
 dependencies = [
  "anyhow",
  "console_error_panic_hook",
@@ -5028,9 +5030,9 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-web"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f01164798296dafad1d7608e2385f28145d36ae180cfef4d5d5ac737d323815a"
+checksum = "cebce373802858838045347792f4aa634591a73739582664ac2019a0348bbff1"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -5058,9 +5060,9 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-wgpu"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cfa13d90b546bec059b6e1c08969b45236d64beb89a96cc6bc54d0df19466ce"
+checksum = "9c02b5c6805781c8978d568df0bd62845a728bc9ac176ec8c4337b65a5daf41f"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -5085,9 +5087,9 @@ dependencies = [
 
 [[package]]
 name = "gpui-fast-windows"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a89bfdc3a922a29f83611fc7f01642533d35260a7f86aa9befb14f2b6dcca093"
+checksum = "e07b0bad5ff42b905882f91797540299a6747a1a34d07696083e3be3bb580c67"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -6187,7 +6189,7 @@ dependencies = [
  "tokio",
  "tower-service",
  "tracing",
- "windows-registry 0.6.1",
+ "windows-registry 0.4.0",
 ]
 
 [[package]]
@@ -6202,7 +6204,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.58.0",
 ]
 
 [[package]]
@@ -6378,26 +6380,6 @@ checksum = "c0a05c691e1fae256cf7013d99dad472dc52d5543322761f83ec8d47eab40d2b"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "igd-next"
-version = "0.17.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de7238d487a9aff61f81b5ab41c0a841532a115a398b5fa92a2fadd0885e2581"
-dependencies = [
- "attohttpc",
- "bytes",
- "futures",
- "http",
- "http-body-util",
- "hyper",
- "hyper-util",
- "log",
- "rand 0.10.3",
- "tokio",
- "url",
- "xmltree",
 ]
 
 [[package]]
@@ -7132,7 +7114,7 @@ dependencies = [
 [[package]]
 name = "librqbit"
 version = "9.1.0"
-source = "git+https://github.com/zerx-lab/rqbit?rev=30a7800b3ca9730231449a26e49c9df5dd2a7bab#30a7800b3ca9730231449a26e49c9df5dd2a7bab"
+source = "git+https://github.com/zerx-lab/rqbit?rev=abcae61832c22e089a8ad5037843215f6422ae72#abcae61832c22e089a8ad5037843215f6422ae72"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -7196,7 +7178,7 @@ dependencies = [
 [[package]]
 name = "librqbit-bencode"
 version = "9.1.0"
-source = "git+https://github.com/zerx-lab/rqbit?rev=30a7800b3ca9730231449a26e49c9df5dd2a7bab#30a7800b3ca9730231449a26e49c9df5dd2a7bab"
+source = "git+https://github.com/zerx-lab/rqbit?rev=abcae61832c22e089a8ad5037843215f6422ae72#abcae61832c22e089a8ad5037843215f6422ae72"
 dependencies = [
  "anyhow",
  "arrayvec",
@@ -7212,7 +7194,7 @@ dependencies = [
 [[package]]
 name = "librqbit-buffers"
 version = "9.1.0"
-source = "git+https://github.com/zerx-lab/rqbit?rev=30a7800b3ca9730231449a26e49c9df5dd2a7bab#30a7800b3ca9730231449a26e49c9df5dd2a7bab"
+source = "git+https://github.com/zerx-lab/rqbit?rev=abcae61832c22e089a8ad5037843215f6422ae72#abcae61832c22e089a8ad5037843215f6422ae72"
 dependencies = [
  "bytes",
  "librqbit-clone-to-owned",
@@ -7223,7 +7205,7 @@ dependencies = [
 [[package]]
 name = "librqbit-clone-to-owned"
 version = "9.1.0"
-source = "git+https://github.com/zerx-lab/rqbit?rev=30a7800b3ca9730231449a26e49c9df5dd2a7bab#30a7800b3ca9730231449a26e49c9df5dd2a7bab"
+source = "git+https://github.com/zerx-lab/rqbit?rev=abcae61832c22e089a8ad5037843215f6422ae72#abcae61832c22e089a8ad5037843215f6422ae72"
 dependencies = [
  "bytes",
 ]
@@ -7231,7 +7213,7 @@ dependencies = [
 [[package]]
 name = "librqbit-core"
 version = "9.1.0"
-source = "git+https://github.com/zerx-lab/rqbit?rev=30a7800b3ca9730231449a26e49c9df5dd2a7bab#30a7800b3ca9730231449a26e49c9df5dd2a7bab"
+source = "git+https://github.com/zerx-lab/rqbit?rev=abcae61832c22e089a8ad5037843215f6422ae72#abcae61832c22e089a8ad5037843215f6422ae72"
 dependencies = [
  "anyhow",
  "bytes",
@@ -7261,7 +7243,7 @@ dependencies = [
 [[package]]
 name = "librqbit-dht"
 version = "9.1.0"
-source = "git+https://github.com/zerx-lab/rqbit?rev=30a7800b3ca9730231449a26e49c9df5dd2a7bab#30a7800b3ca9730231449a26e49c9df5dd2a7bab"
+source = "git+https://github.com/zerx-lab/rqbit?rev=abcae61832c22e089a8ad5037843215f6422ae72#abcae61832c22e089a8ad5037843215f6422ae72"
 dependencies = [
  "anyhow",
  "backon",
@@ -7308,7 +7290,7 @@ dependencies = [
 [[package]]
 name = "librqbit-lsd"
 version = "9.1.0"
-source = "git+https://github.com/zerx-lab/rqbit?rev=30a7800b3ca9730231449a26e49c9df5dd2a7bab#30a7800b3ca9730231449a26e49c9df5dd2a7bab"
+source = "git+https://github.com/zerx-lab/rqbit?rev=abcae61832c22e089a8ad5037843215f6422ae72#abcae61832c22e089a8ad5037843215f6422ae72"
 dependencies = [
  "anyhow",
  "atoi 3.1.1",
@@ -7327,7 +7309,7 @@ dependencies = [
 [[package]]
 name = "librqbit-peer-protocol"
 version = "9.1.0"
-source = "git+https://github.com/zerx-lab/rqbit?rev=30a7800b3ca9730231449a26e49c9df5dd2a7bab#30a7800b3ca9730231449a26e49c9df5dd2a7bab"
+source = "git+https://github.com/zerx-lab/rqbit?rev=abcae61832c22e089a8ad5037843215f6422ae72#abcae61832c22e089a8ad5037843215f6422ae72"
 dependencies = [
  "anyhow",
  "bitvec",
@@ -7347,7 +7329,7 @@ dependencies = [
 [[package]]
 name = "librqbit-sha1-wrapper"
 version = "9.1.0"
-source = "git+https://github.com/zerx-lab/rqbit?rev=30a7800b3ca9730231449a26e49c9df5dd2a7bab#30a7800b3ca9730231449a26e49c9df5dd2a7bab"
+source = "git+https://github.com/zerx-lab/rqbit?rev=abcae61832c22e089a8ad5037843215f6422ae72#abcae61832c22e089a8ad5037843215f6422ae72"
 dependencies = [
  "assert_cfg",
  "aws-lc-rs",
@@ -7357,7 +7339,7 @@ dependencies = [
 [[package]]
 name = "librqbit-tracker-comms"
 version = "9.1.0"
-source = "git+https://github.com/zerx-lab/rqbit?rev=30a7800b3ca9730231449a26e49c9df5dd2a7bab#30a7800b3ca9730231449a26e49c9df5dd2a7bab"
+source = "git+https://github.com/zerx-lab/rqbit?rev=abcae61832c22e089a8ad5037843215f6422ae72#abcae61832c22e089a8ad5037843215f6422ae72"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -7386,7 +7368,7 @@ dependencies = [
 [[package]]
 name = "librqbit-upnp"
 version = "9.1.0"
-source = "git+https://github.com/zerx-lab/rqbit?rev=30a7800b3ca9730231449a26e49c9df5dd2a7bab#30a7800b3ca9730231449a26e49c9df5dd2a7bab"
+source = "git+https://github.com/zerx-lab/rqbit?rev=abcae61832c22e089a8ad5037843215f6422ae72#abcae61832c22e089a8ad5037843215f6422ae72"
 dependencies = [
  "anyhow",
  "bstr",
@@ -8334,7 +8316,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "680998035259dcfcafe653688bf2aa6d3e2dc05e98be6ab46afb089dc84f1df8"
 dependencies = [
- "proc-macro-crate 3.5.0",
+ "proc-macro-crate 1.3.1",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -8919,7 +8901,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7d8fae84b431384b68627d0f9b3b1245fcf9f46f6c0e3dc902e9dce64edd1967"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.45.0",
 ]
 
 [[package]]
@@ -12901,19 +12883,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
-name = "ts2mp4"
-version = "0.3.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4697fd0e0e8ceeae24be0e8d06d6d9929e396088e861e1388675a8d74fdfdfa6"
-dependencies = [
- "clap",
- "console_error_panic_hook",
- "js-sys",
- "wasm-bindgen",
- "web-sys",
-]
-
-[[package]]
 name = "ttf-parser"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -14983,15 +14952,6 @@ dependencies = [
  "log",
  "mac",
  "markup5ever 0.12.1",
-]
-
-[[package]]
-name = "xmltree"
-version = "0.10.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7d8a75eaf6557bb84a65ace8609883db44a29951042ada9b393151532e41fcb"
-dependencies = [
- "xml-rs",
 ]
 
 [[package]]

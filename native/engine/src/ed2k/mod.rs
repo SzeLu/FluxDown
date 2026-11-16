@@ -309,7 +309,6 @@ pub async fn load_client_config(db: &crate::db::Db) -> Result<ClientConfig, crat
             .await?
             .and_then(|value| value.parse::<u16>().ok())
             .unwrap_or(0),
-        udp_port: 0,
         servers,
         manual_servers,
         enable_upnp: flag(db.get_config("ed2k_enable_upnp").await?),
@@ -755,6 +754,8 @@ async fn run_ed2k_download_inner(params: &DownloadParams) -> Result<(i64, String
         };
         if pending.is_empty() {
             live.set_phase(TaskPhase::Verifying, 0);
+            let _local_work = crate::transfer_activity::LocalWorkGuard::new(params.sink.clone());
+
             match finalize_and_verify(&params.db, &task_id, &temp_path, &link, part_size).await {
                 Ok(()) => break 'outer Ok(total_bytes as i64),
                 Err(DownloadError::Ed2kIntegrity(_)) if finalize_retries < FINALIZE_MAX_RETRIES => {
