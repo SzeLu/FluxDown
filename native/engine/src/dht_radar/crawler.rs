@@ -32,11 +32,11 @@ const MAX_NODES: usize = 2048;
 /// 应答 `nodes` 时返回的节点数。
 const REPLY_NODES: usize = 8;
 /// 每次维护向多少个节点发 `find_node`。
-const EXPAND_PER_TICK: usize = 6;
+const EXPAND_PER_TICK: usize = 4;
 /// 每次维护向多少个节点发 `get_peers`（针对已知 infohash）。
-const SAMPLE_PER_TICK: usize = 20;
+const SAMPLE_PER_TICK: usize = 8;
 /// 每次维护向多少个节点发 `sample_infohashes`（BEP 51）——主动索引的主要来源。
-const SAMPLE_HASHES_PER_TICK: usize = 3;
+const SAMPLE_HASHES_PER_TICK: usize = 2;
 /// 为单个 infohash 找 peer 时，问几个距离最近的节点。
 const GET_PEERS_FANOUT: usize = 4;
 /// 应答别人 `sample_infohashes` 时最多返回的样本数。
@@ -183,6 +183,9 @@ impl Crawler {
     }
 
     fn send_find_node(&self, address: SocketAddrV4, target: &NodeId) -> std::io::Result<()> {
+        if !self.stats.query_budget.try_take() {
+            return Ok(());
+        }
         let args = krpc::Value::dict([
             (&b"id"[..], krpc::Value::Bytes(self.node_id.to_vec())),
             (&b"target"[..], krpc::Value::Bytes(target.to_vec())),
@@ -196,6 +199,9 @@ impl Crawler {
         address: SocketAddrV4,
         infohash: &InfoHash,
     ) -> std::io::Result<()> {
+        if !self.stats.query_budget.try_take() {
+            return Ok(());
+        }
         let transaction = self.next_tid();
         if self.pending.len() >= 512 {
             self.pending.clear();
@@ -211,6 +217,9 @@ impl Crawler {
 
     /// BEP 51：索取节点索引的 infohash 样本。
     fn send_sample_infohashes(&mut self, address: SocketAddrV4) -> std::io::Result<()> {
+        if !self.stats.query_budget.try_take() {
+            return Ok(());
+        }
         let transaction = self.next_tid();
         if self.pending.len() >= 512 {
             self.pending.clear();

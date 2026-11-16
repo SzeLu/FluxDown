@@ -298,12 +298,37 @@ pub async fn run_with(
 
     // DHT 种子雷达：配置来自 daemon 配置表，默认关闭（开启后会监听 UDP 并向公网 DHT 发包）。
     let dht_radar = {
+        // 雷达不能占用 BT 的端口区间：先绑定会让 BT 的 DHT / 传入连接拿不到端口，
+        // 表现为下载和局域网发现各种超时。旧配置里的 6881 默认值在这里自动退回临时端口。
+        let bt_enabled = config_enabled(&all_config, "bt_enabled", true);
+        let bt_port_a = all_config
+            .get("bt_port_start")
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(6881);
+        let bt_port_b = all_config
+            .get("bt_port_end")
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(6891);
+        let (bt_low, bt_high) = (bt_port_a.min(bt_port_b), bt_port_a.max(bt_port_b));
+        let configured_port = all_config
+            .get("dht_radar_port")
+            .and_then(|value| value.parse::<u16>().ok())
+            .unwrap_or(fluxdown_engine::dht_radar::DEFAULT_PORT);
+        let radar_port = if bt_enabled
+            && configured_port != 0
+            && (bt_low..=bt_high).contains(&configured_port)
+        {
+            tracing::info!(
+                port = configured_port,
+                "dht radar port overlaps the BT range; using an ephemeral port"
+            );
+            0
+        } else {
+            configured_port
+        };
         let config = fluxdown_engine::dht_radar::RadarConfig {
             enabled: config_enabled(&all_config, "dht_radar_enabled", false),
-            port: all_config
-                .get("dht_radar_port")
-                .and_then(|value| value.parse().ok())
-                .unwrap_or(fluxdown_engine::dht_radar::DEFAULT_PORT),
+            port: radar_port,
             capacity: all_config
                 .get("dht_radar_capacity")
                 .and_then(|value| value.parse().ok())

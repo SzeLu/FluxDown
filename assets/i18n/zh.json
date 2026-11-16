@@ -4141,6 +4141,7 @@
   "dhtRadarExportFailed": "导出失败，请检查守护进程连接",
   "dhtRadarImported": "已导入 {n} 条，跳过 {skipped} 条，无效 {invalid} 条",
   "dhtRadarImportFailed": "导入失败，请检查文件格式",
+  "dhtRadarRestartRequired": "后台服务仍是旧版本，请完全退出 FluxDown 后重新打开。",
   "dhtRadarArchiveLimit": "自动归档：{n}",
   "taskEditTitle": "编辑任务",
   "taskEditSave": "保存",

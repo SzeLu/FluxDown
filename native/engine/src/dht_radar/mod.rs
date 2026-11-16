@@ -18,12 +18,16 @@ pub mod store;
 
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::dht_radar::store::{InfoHash, Sort, Store, StoreStats, TorrentEntry};
 
-/// 默认监听端口（与 BT 常用端口一致；被占用时退回系统分配）。
-pub const DEFAULT_PORT: u16 = 6881;
+/// 默认监听端口：0 = 系统分配。
+///
+/// 不用 6881 之类的固定端口：BT 会话默认占用 6881–6891，雷达先绑定会让 BT 的
+/// DHT / 传入连接拿不到端口，反过来 BT 先启动时雷达又只能退回临时端口。
+/// 临时端口足够收应答（NAT 映射随出站报文刷新），也不会和下载抢端口。
+pub const DEFAULT_PORT: u16 = 0;
 /// 默认保留的种子条数。
 pub const DEFAULT_CAPACITY: usize = 20_000;
 /// 默认的自动归档阈值：数据库里的存档超过这个条数时，最久未观测的部分会自动打包归档。
@@ -34,10 +38,61 @@ pub const DEFAULT_ARCHIVE_THRESHOLD: usize = 10_000;
 pub const DEFAULT_NODES: usize = 8;
 /// 虚拟节点数上限：每个节点一个 UDP 端口与 2048 条节点表。
 pub const MAX_NODES: usize = 32;
+/// 主动查询的全局速率上限（每秒报文数），所有虚拟节点共享。
+///
+/// DHT 报文很便宜，家用路由器的 NAT 表不便宜：8 个节点不加限制地每 2 秒发几十个
+/// `get_peers`，会持续制造新的 UDP 映射，弱路由器上会拖慢整机网络（表现为各种
+/// 连接超时）。令牌桶把爬虫本身限在后台可忽略的速率。
+pub const MAX_PROACTIVE_PPS: u32 = 40;
+/// 允许的突发报文数。
+const PROACTIVE_BURST: f64 = 80.0;
 /// 元数据抓取并发线程数。抓取是长连接 IO，线程多一点才能跟上采集速度。
-const METADATA_WORKERS: usize = 16;
+const METADATA_WORKERS: usize = 4;
 /// 每个 worker 一轮取的候选条数。
-const METADATA_BATCH: usize = 8;
+const METADATA_BATCH: usize = 4;
+/// 每次元数据尝试后的最小间隔：给网络和 NAT 表留出空隙。
+const METADATA_PACING: Duration = Duration::from_millis(250);
+
+/// 主动查询预算状态。
+#[derive(Debug)]
+struct QueryBudgetState {
+    tokens: f64,
+    last: Instant,
+}
+
+/// 跨虚拟节点共享的主动查询令牌桶；应答报文不经过这里。
+#[derive(Debug)]
+pub(crate) struct QueryBudget {
+    state: Mutex<QueryBudgetState>,
+}
+
+impl Default for QueryBudget {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(QueryBudgetState {
+                tokens: PROACTIVE_BURST,
+                last: Instant::now(),
+            }),
+        }
+    }
+}
+
+impl QueryBudget {
+    /// 取一个令牌；超过速率上限时返回 `false`，调用方跳过这次主动查询。
+    pub(crate) fn try_take(&self) -> bool {
+        let mut state = store::lock(&self.state);
+        let now = Instant::now();
+        let elapsed = now.duration_since(state.last).as_secs_f64();
+        state.last = now;
+        state.tokens = (state.tokens + elapsed * f64::from(MAX_PROACTIVE_PPS)).min(PROACTIVE_BURST);
+        if state.tokens >= 1.0 {
+            state.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
 
 /// 雷达配置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -119,6 +174,8 @@ pub struct RadarStats {
     pub nodes_known: AtomicU64,
     pub bound_port: AtomicU32,
     pub last_packet: AtomicI64,
+    /// 主动查询令牌桶（所有虚拟节点共享）。
+    pub(crate) query_budget: QueryBudget,
 }
 
 /// 雷达句柄。克隆代价低（内部共享），由 daemon 持有单例。
@@ -390,6 +447,8 @@ fn metadata_worker(
                     tracing::debug!(%peer, %error, "dht-radar metadata fetch failed");
                 }
             }
+            // 限速：即使是快失败，也不要让 4 个 worker 在死地址上连成一片。
+            std::thread::sleep(METADATA_PACING);
         }
     }
 }
@@ -405,4 +464,25 @@ pub fn now_unix() -> i64 {
 /// infohash 十六进制（RPC 与磁力链接共用）。
 pub fn hex(infohash: &InfoHash) -> String {
     store::hex(infohash)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PROACTIVE_BURST, QueryBudget};
+
+    #[test]
+    fn query_budget_allows_a_burst_then_throttles() {
+        let budget = QueryBudget::default();
+        let mut allowed = 0usize;
+        while budget.try_take() {
+            allowed += 1;
+            assert!(allowed < 1_000, "query budget must eventually stop");
+        }
+        // 循环本身耗时会有极少量补充，允许几个包的误差。
+        let burst = PROACTIVE_BURST as usize;
+        assert!(
+            (burst - 1..=burst + 4).contains(&allowed),
+            "allowed {allowed}, burst {burst}"
+        );
+    }
 }

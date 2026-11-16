@@ -4061,6 +4061,7 @@
   "dhtRadarExportFailed": "Couldn't export; check the daemon connection",
   "dhtRadarImported": "Imported {n}, skipped {skipped}, invalid {invalid}",
   "dhtRadarImportFailed": "Couldn't import this file; check its format",
+  "dhtRadarRestartRequired": "The background service is out of date. Quit FluxDown completely and relaunch.",
   "dhtRadarArchiveLimit": "Auto-archive: {n}",
   "viewGroupDirectory": "Directorio",
   "viewDirectoryDefault": "Directorio de descarga predeterminado",

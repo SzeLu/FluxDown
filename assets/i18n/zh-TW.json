@@ -4061,6 +4061,7 @@
   "dhtRadarExportFailed": "匯出失敗，請檢查守護進程連線",
   "dhtRadarImported": "已匯入 {n} 條，跳過 {skipped} 條，無效 {invalid} 條",
   "dhtRadarImportFailed": "匯入失敗，請檢查檔案格式",
+  "dhtRadarRestartRequired": "背景服務仍是舊版本，請完全結束 FluxDown 後重新開啟。",
   "dhtRadarArchiveLimit": "自動歸檔：{n}",
   "viewGroupDirectory": "目錄",
   "viewDirectoryDefault": "預設下載目錄",

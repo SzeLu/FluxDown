@@ -7,9 +7,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use fluxdown_protocol::{
-    CreateTaskRequest, DaemonCreateTaskParams, DhtRadarClearDto, DhtRadarConfigDto,
-    DhtRadarExportDto, DhtRadarImportDto, DhtRadarImportParams, DhtRadarItemDto, DhtRadarListDto,
-    DhtRadarListParams, DhtRadarSetConfigParams, DhtRadarStatsDto, method,
+    ApplicationErrorCode, CreateTaskRequest, DaemonCreateTaskParams, DhtRadarClearDto,
+    DhtRadarConfigDto, DhtRadarExportDto, DhtRadarImportDto, DhtRadarImportParams, DhtRadarItemDto,
+    DhtRadarListDto, DhtRadarListParams, DhtRadarSetConfigParams, DhtRadarStatsDto, method,
 };
 use fluxdown_ui_components::{ButtonVariant, card, loading_button};
 use fluxdown_ui_i18n::Translator;
@@ -383,6 +383,8 @@ impl DhtRadarView {
                     return;
                 }
             };
+            // 旧的后台服务不认识新方法（应用更新后没完全退出重开）时，给出可操作的提示。
+            let mut stale_service = false;
             let written = match client
                 .call::<Value, DhtRadarExportDto>(method::DAEMON_DHT_RADAR_EXPORT, None)
                 .await
@@ -398,11 +400,15 @@ impl DhtRadarView {
                 }
                 // 没有存档时也把选择的路径当成一次成功的空导出说清楚。
                 Ok(_) => Some(0),
-                Err(_) => None,
+                Err(error) => {
+                    stale_service = error.code == ApplicationErrorCode::Unsupported;
+                    None
+                }
             };
             drop(this.update_in(cx, |this, _, cx| {
                 this.busy = false;
                 this.notice = Some(match written {
+                    None if stale_service => this.t("dhtRadarRestartRequired"),
                     None => this.t("dhtRadarExportFailed"),
                     Some(0) => this.t("dhtRadarExportEmpty"),
                     Some(count) => SharedString::from(
@@ -454,15 +460,22 @@ impl DhtRadarView {
                     std::fs::read_to_string(&path).ok()
                 })
                 .await;
+            let mut stale_service = false;
             let result = match text {
                 None => None,
-                Some(text) => client
+                Some(text) => match client
                     .call::<DhtRadarImportParams, DhtRadarImportDto>(
                         method::DAEMON_DHT_RADAR_IMPORT,
                         Some(DhtRadarImportParams { text }),
                     )
                     .await
-                    .ok(),
+                {
+                    Ok(dto) => Some(dto),
+                    Err(error) => {
+                        stale_service = error.code == ApplicationErrorCode::Unsupported;
+                        None
+                    }
+                },
             };
             drop(this.update_in(cx, |this, _, cx| {
                 this.busy = false;
@@ -479,7 +492,11 @@ impl DhtRadarView {
                         this.refresh(cx);
                     }
                     None => {
-                        this.notice = Some(this.t("dhtRadarImportFailed"));
+                        this.notice = Some(this.t(if stale_service {
+                            "dhtRadarRestartRequired"
+                        } else {
+                            "dhtRadarImportFailed"
+                        }));
                         cx.notify();
                     }
                 }
