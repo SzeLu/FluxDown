@@ -275,6 +275,38 @@ mobile/FluxDown/scripts/build-core.sh
 
 Android 正式发布使用原生工程的 `ANDROID_NATIVE_*` 签名，**不能覆盖安装旧 Flutter APK**；卸载旧应用前请先备份需要的数据。旧 Flutter SDK、Rinf 与 hub 不再是构建依赖。共享 assets、PC/Web 现有旧数据与主题升级兼容、官网旧主题编辑器继续保留。
 
+### 正式版（release）构建
+
+正式发布产物由 GitHub Actions 构建：[`.github/workflows/release.yml`](.github/workflows/release.yml) 从 `v*` tag 驱动统一发布，负责签名、公证与商店上传。下面的命令可在本地复现同样的构建；本地产物未签名（或仅 ad-hoc 签名），仅供自用，不用于分发。
+
+正式构建使用 `[profile.release]`（opt-level 3、fat LTO、单 codegen 单元），编译明显比调试构建慢。产品版本号经 `FLUXDOWN_APP_VERSION` 在编译期注入；不设置时回退到 `Cargo.toml` 的 crate 版本。
+
+```shell
+# 桌面端：UI + agent + daemon + 浏览器中继
+FLUXDOWN_APP_VERSION=0.6.4 cargo build --locked --release \
+  -p fluxdown_ui_app -p fluxdown_agent -p fluxdown_daemon -p fluxdown_nmh \
+  --features fluxdown_agent/desktop --bins
+```
+
+四个二进制必须放在同一目录：`fluxdown-desktop` 在自己所在目录查找 `fluxdown-agent`，agent 同样查找 `fluxdownd` 与 `fluxdown_nmh`。请始终发布 release 产物：Windows 上的调试构建会在运行期按构建机的绝对路径读取 GPUI 着色器，换机即失效。
+
+| 平台 | 打包命令 |
+|---|---|
+| **macOS** | `VERSION=0.6.4 ARCHS=arm64 scripts/package_gpui_macos.sh` → `build/gpui-macos` 下的 `.dmg` 与 `.tar.gz`。未提供 `MACOS_CERT_P12_PATH` / `MACOS_SIGN_IDENTITY` 时只做 ad-hoc 签名；公证还需 `APPLE_API_KEY_PATH` / `APPLE_API_KEY_ID` / `APPLE_API_ISSUER_ID`。`ARCHS` 默认 `arm64 x86_64`（universal，需先安装两个 rustup target）。 |
+| **Linux**（x64） | `VERSION=0.6.4 BIN_DIR=target/release OUT_DIR=build/installer scripts/package_gpui_linux.sh` → `.tar.gz` / `.AppImage` / `.deb` / `.pkg.tar.zst`。依赖 `dpkg-deb`、`zstd`、`tar` 与 `appimagetool`（或用 `APPIMAGETOOL=<路径>`）。 |
+| **Windows**（x64 / ARM64） | 先把四个 `.exe` 与 `msvcp140*.dll` / `vcruntime140*.dll` 放进 `build\gpui\windows-<arch>`，再执行 `iscc /DMyAppVersion=0.6.4 /DMyAppArch=x64 "/DMySourceDir=%CD%\build\gpui\windows-x64" installer\windows\setup.iss`（Inno Setup 6）。便携版再复制该目录、放入空的 `portable` 标记文件与 `flux_down.exe` 后打包 zip。 |
+
+无头服务器与 CLI：
+
+```shell
+cd web && bun run build && cd ..   # 必须先构建：编译期会内嵌进 agent
+FLUXDOWN_APP_VERSION=0.6.4 cargo build --locked --release -p fluxdown_agent --features web-ui
+FLUXDOWN_APP_VERSION=0.6.4 cargo build --locked --release -p fluxdown_daemon
+FLUXDOWN_APP_VERSION=0.6.4 cargo build --locked --release -p fluxdown_cli
+```
+
+`fluxdown-agent` 与 `fluxdownd` 必须放在同一目录。原生移动端的 release 构建沿用同样的分工：iOS 先跑 `scripts/build-core.sh --release`（App Store 包加 `--flavor store`）再做 Xcode Release 构建；Android 用 `mobile/Android/scripts/package.sh --version 0.6.4 --signing <文件>`，由脚本用 cargo-ndk 交叉编译核心并产出签名 APK。
+
 <details>
 <summary><b>运行测试</b></summary>
 

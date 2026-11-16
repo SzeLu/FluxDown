@@ -275,6 +275,38 @@ mobile/FluxDown/scripts/build-core.sh
 
 公式の Android のリリースには、ネイティブのプロジェクトの `ANDROID_NATIVE_*` の署名用の認証情報が使われます。**古い Flutter の APK の上からインストールすることはできません**。古いアプリをアンインストールする前に、必要なデータをバックアップしてください。廃止された Flutter SDK、Rinf、hub は、もはやビルドの前提条件ではありません。共通のアセット、旧デスクトップのデータ/テーマのアップグレードの互換性、Web サイトの旧テーマエディターは、引き続きサポートされています。
 
+### リリースビルド
+
+リリース用の成果物は GitHub Actions が生成します。[`.github/workflows/release.yml`](.github/workflows/release.yml) が `v*` タグから統一リリースを駆動し、署名、公証、ストアへのアップロードまで行います。以下のコマンドで同じビルドをローカルで再現できますが、生成物は未署名（または ad-hoc 署名）で、個人利用向けであり、再配布用ではありません。
+
+リリースビルドは `[profile.release]`（opt-level 3、fat LTO、単一の codegen ユニット）を使うため、デバッグビルドより明らかに時間がかかります。製品のバージョンはコンパイル時に `FLUXDOWN_APP_VERSION` で注入します。未設定の場合は `Cargo.toml` の crate のバージョンにフォールバックします。
+
+```shell
+# デスクトップ：UI + agent + daemon + ブラウザーリレー
+FLUXDOWN_APP_VERSION=0.6.4 cargo build --locked --release \
+  -p fluxdown_ui_app -p fluxdown_agent -p fluxdown_daemon -p fluxdown_nmh \
+  --features fluxdown_agent/desktop --bins
+```
+
+4 つのバイナリは同じディレクトリに置いてください。`fluxdown-desktop` は自身と同じディレクトリで `fluxdown-agent` を探し、agent も同様に `fluxdownd` と `fluxdown_nmh` を探します。常にリリースビルドを配布してください。Windows のデバッグビルドは GPUI のシェーダーをビルドマシンの絶対パスから実行時に読み込むため、別のマシンへ移すと動作しません。
+
+| プラットフォーム | パッケージングのコマンド |
+|---|---|
+| **macOS** | `VERSION=0.6.4 ARCHS=arm64 scripts/package_gpui_macos.sh` → `build/gpui-macos` に `.dmg` と `.tar.gz`。`MACOS_CERT_P12_PATH` / `MACOS_SIGN_IDENTITY` を指定しない場合は ad-hoc 署名になります。公証にはさらに `APPLE_API_KEY_PATH` / `APPLE_API_KEY_ID` / `APPLE_API_ISSUER_ID` が必要です。`ARCHS` の既定値は `arm64 x86_64`（universal。両方の rustup target が必要）。 |
+| **Linux**（x64） | `VERSION=0.6.4 BIN_DIR=target/release OUT_DIR=build/installer scripts/package_gpui_linux.sh` → `.tar.gz` / `.AppImage` / `.deb` / `.pkg.tar.zst`。`dpkg-deb`、`zstd`、`tar`、`appimagetool`（または `APPIMAGETOOL=<path>`）が必要です。 |
+| **Windows**（x64 / ARM64） | 4 つの `.exe` と `msvcp140*.dll` / `vcruntime140*.dll` を `build\gpui\windows-<arch>` に置き、`iscc /DMyAppVersion=0.6.4 /DMyAppArch=x64 "/DMySourceDir=%CD%\build\gpui\windows-x64" installer\windows\setup.iss` を実行します（Inno Setup 6）。ポータブル版は同じディレクトリをコピーし、空の `portable` マーカーファイルと `flux_down.exe` を追加して zip にします。 |
+
+ヘッドレスのサーバーと CLI：
+
+```shell
+cd web && bun run build && cd ..   # 先にビルドが必須：コンパイル時に agent へ埋め込まれる
+FLUXDOWN_APP_VERSION=0.6.4 cargo build --locked --release -p fluxdown_agent --features web-ui
+FLUXDOWN_APP_VERSION=0.6.4 cargo build --locked --release -p fluxdown_daemon
+FLUXDOWN_APP_VERSION=0.6.4 cargo build --locked --release -p fluxdown_cli
+```
+
+`fluxdown-agent` と `fluxdownd` は同じディレクトリにまとめて配置してください。ネイティブのモバイルのリリースも同じ分担です。iOS では Xcode の Release ビルドの前に `scripts/build-core.sh --release`（App Store 版は `--flavor store` を追加）を実行し、Android では `mobile/Android/scripts/package.sh --version 0.6.4 --signing <file>` を使います（cargo-ndk でコアをクロスコンパイルし、署名済み APK を生成します）。
+
 <details>
 <summary><b>テストの実行</b></summary>
 

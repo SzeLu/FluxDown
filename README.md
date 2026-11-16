@@ -275,6 +275,38 @@ mobile/FluxDown/scripts/build-core.sh
 
 Official Android releases use the native project's `ANDROID_NATIVE_*` signing credentials. **They cannot be installed over the old Flutter APK**; back up needed data before uninstalling the old app. The retired Flutter SDK, Rinf and hub are no longer build prerequisites. Shared assets, legacy desktop data/theme upgrade compatibility and the website's legacy theme editor remain supported.
 
+### Release builds
+
+Official release artifacts are built by GitHub Actions: [`.github/workflows/release.yml`](.github/workflows/release.yml) drives the unified release from a `v*` tag, including signing, notarization and store uploads. The commands below reproduce the same builds locally; the results are unsigned (or ad-hoc signed) and meant for personal use, not redistribution.
+
+Release builds use `[profile.release]` (opt-level 3, fat LTO, one codegen unit), so they compile noticeably slower than debug builds. The product version is injected at compile time through `FLUXDOWN_APP_VERSION`; without it, builds report the crate version from `Cargo.toml`.
+
+```shell
+# Desktop: UI + agent + daemon + browser relay
+FLUXDOWN_APP_VERSION=0.6.4 cargo build --locked --release \
+  -p fluxdown_ui_app -p fluxdown_agent -p fluxdown_daemon -p fluxdown_nmh \
+  --features fluxdown_agent/desktop --bins
+```
+
+Keep all four binaries in the same directory: `fluxdown-desktop` looks for `fluxdown-agent` next to itself, and the agent locates `fluxdownd` and `fluxdown_nmh` the same way. Always ship release builds — on Windows, debug builds resolve GPUI shaders at runtime from absolute paths on the build machine, so they break as soon as the binaries move.
+
+| Platform | Packaging command |
+|---|---|
+| **macOS** | `VERSION=0.6.4 ARCHS=arm64 scripts/package_gpui_macos.sh` → `.dmg` + `.tar.gz` in `build/gpui-macos`. Ad-hoc signed unless `MACOS_CERT_P12_PATH` / `MACOS_SIGN_IDENTITY` is set; notarization additionally needs `APPLE_API_KEY_PATH` / `APPLE_API_KEY_ID` / `APPLE_API_ISSUER_ID`. `ARCHS` defaults to `arm64 x86_64` (universal; both rustup targets required). |
+| **Linux** (x64) | `VERSION=0.6.4 BIN_DIR=target/release OUT_DIR=build/installer scripts/package_gpui_linux.sh` → `.tar.gz` / `.AppImage` / `.deb` / `.pkg.tar.zst`. Needs `dpkg-deb`, `zstd`, `tar` and `appimagetool` (or `APPIMAGETOOL=<path>`). |
+| **Windows** (x64 / ARM64) | Stage the four `.exe` files plus `msvcp140*.dll` / `vcruntime140*.dll` into `build\gpui\windows-<arch>`, then run `iscc /DMyAppVersion=0.6.4 /DMyAppArch=x64 "/DMySourceDir=%CD%\build\gpui\windows-x64" installer\windows\setup.iss` (Inno Setup 6). For a portable build, copy the same directory, add an empty `portable` marker file and `flux_down.exe`, then zip it. |
+
+Headless server and CLI:
+
+```shell
+cd web && bun run build && cd ..   # must be built first: embedded into the agent at compile time
+FLUXDOWN_APP_VERSION=0.6.4 cargo build --locked --release -p fluxdown_agent --features web-ui
+FLUXDOWN_APP_VERSION=0.6.4 cargo build --locked --release -p fluxdown_daemon
+FLUXDOWN_APP_VERSION=0.6.4 cargo build --locked --release -p fluxdown_cli
+```
+
+Ship `fluxdown-agent` and `fluxdownd` together in one directory. Native mobile releases follow the same split: iOS runs `scripts/build-core.sh --release` (add `--flavor store` for App Store builds) before the Xcode Release build; Android uses `mobile/Android/scripts/package.sh --version 0.6.4 --signing <file>`, which cross-compiles the core with `cargo-ndk` and produces signed APKs.
+
 <details>
 <summary><b>Running tests</b></summary>
 
