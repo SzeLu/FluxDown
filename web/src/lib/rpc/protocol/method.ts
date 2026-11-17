@@ -176,6 +176,20 @@ export const METHOD = {
   // 以下 agent 内部方法，Web 不得调用。
   DAEMON_BT_GUARD_CLOUD_APPLY: 'daemon.bt.guard.cloud.apply',
   DAEMON_BT_GUARD_EVIDENCE_DRAIN: 'daemon.bt.guard.evidence.drain',
+  /** DHT 种子雷达：列表查询（`DhtRadarListParams` → `DhtRadarListDto`）。 */
+  DAEMON_DHT_RADAR_LIST: 'daemon.dht.radar.list',
+  /** DHT 种子雷达：采集统计（无参 → `DhtRadarStatsDto`）。 */
+  DAEMON_DHT_RADAR_STATS: 'daemon.dht.radar.stats',
+  /** DHT 种子雷达：当前配置（无参 → `DhtRadarConfigDto`）。 */
+  DAEMON_DHT_RADAR_CONFIG: 'daemon.dht.radar.config',
+  /** DHT 种子雷达：修改配置 / 开关采集（`DhtRadarSetConfigParams` → `DhtRadarConfigDto`）。 */
+  DAEMON_DHT_RADAR_CONFIG_SET: 'daemon.dht.radar.config.set',
+  /** DHT 种子雷达：清空存档（无参 → `DhtRadarClearDto`）。 */
+  DAEMON_DHT_RADAR_CLEAR: 'daemon.dht.radar.clear',
+  /** DHT 种子雷达：导出存档（无参 → `DhtRadarExportDto`，慢方法）。 */
+  DAEMON_DHT_RADAR_EXPORT: 'daemon.dht.radar.export',
+  /** DHT 种子雷达：导入存档（`DhtRadarImportParams` → `DhtRadarImportDto`，慢方法）。 */
+  DAEMON_DHT_RADAR_IMPORT: 'daemon.dht.radar.import',
   DAEMON_ED2K_SERVER_SUBSCRIPTION_REFRESH: 'daemon.ed2k.serverSubscription.refresh',
   /** Kad 节点（nodes.dat）订阅立即刷新（慢方法）→ `Ed2kNodesSubRefreshResponse`。 */
   DAEMON_ED2K_NODES_SUBSCRIPTION_REFRESH: 'daemon.ed2k.nodesSubscription.refresh',

@@ -35,6 +35,15 @@ import type {
   DaemonCreateTaskParams,
   DaemonDiagnosticsDescribe,
   DaemonRuntimeStatsDto,
+  DhtRadarClearDto,
+  DhtRadarConfigDto,
+  DhtRadarExportDto,
+  DhtRadarImportDto,
+  DhtRadarImportParams,
+  DhtRadarListDto,
+  DhtRadarListParams,
+  DhtRadarSetConfigParams,
+  DhtRadarStatsDto,
   Ed2kServerSubRefreshResponse,
   FsListParams,
   FsListResponse,
@@ -462,6 +471,18 @@ const ed2k = {
     call<Ed2kKadBootstrapDto>(METHOD.DAEMON_ED2K_KAD_BOOTSTRAP, params, { timeoutMs: ED2K_PROBE_TIMEOUT_MS }),
 };
 
+/** DHT 种子雷达。导出/导入是慢方法（可达数万条 / 16 MiB），按慢方法超时。 */
+const dhtRadar = {
+  list: (params?: DhtRadarListParams) => call<DhtRadarListDto>(METHOD.DAEMON_DHT_RADAR_LIST, params ?? {}),
+  stats: () => call<DhtRadarStatsDto>(METHOD.DAEMON_DHT_RADAR_STATS),
+  config: () => call<DhtRadarConfigDto>(METHOD.DAEMON_DHT_RADAR_CONFIG),
+  setConfig: (params: DhtRadarSetConfigParams) => call<DhtRadarConfigDto>(METHOD.DAEMON_DHT_RADAR_CONFIG_SET, params),
+  clear: () => call<DhtRadarClearDto>(METHOD.DAEMON_DHT_RADAR_CLEAR),
+  export: () => call<DhtRadarExportDto>(METHOD.DAEMON_DHT_RADAR_EXPORT, undefined, { timeoutMs: SLOW_MIRROR_TIMEOUT_MS }),
+  import: (params: DhtRadarImportParams) =>
+    call<DhtRadarImportDto>(METHOD.DAEMON_DHT_RADAR_IMPORT, params, { timeoutMs: SLOW_MIRROR_TIMEOUT_MS }),
+};
+
 const diagnostics = {
   describe: () => call<DaemonDiagnosticsDescribe>(METHOD.DAEMON_DIAGNOSTICS_DESCRIBE),
   prepareLogExport: () => call<PrepareLogExportResult>(METHOD.DAEMON_DIAGNOSTICS_PREPARE_LOG_EXPORT),
@@ -483,5 +504,6 @@ export const daemon = {
   webhook,
   bt,
   ed2k,
+  dhtRadar,
   diagnostics,
 };

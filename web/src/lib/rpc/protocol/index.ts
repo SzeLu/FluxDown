@@ -5,6 +5,7 @@ export * from './btGuard';
 export * from './cloudNotify';
 export * from './common';
 export * from './config';
+export * from './dhtRadar';
 export * from './error';
 export * from './event';
 export * from './method';

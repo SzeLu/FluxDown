@@ -1,6 +1,6 @@
 // TanStack Router（history 模式）。
 //   /login /setup            —— 无外壳（AuthLayout）
-//   壳路由 `shell`（需登录）  —— AppShell：`/` 下载、`/rss`、`/webhooks`、`/plugins/$pluginId/$viewId`、`/settings[/$category]`
+//   壳路由 `shell`（需登录）  —— AppShell：`/` 下载、`/rss`、`/webhooks`、`/dht-radar`、`/plugins/$pluginId/$viewId`、`/settings[/$category]`
 // 未登录访问壳内路由 → /login；已登录访问 /login → /。
 
 import { Outlet, createRootRoute, createRoute, createRouter, redirect } from '@tanstack/react-router'
@@ -9,6 +9,7 @@ import { LoginPage } from './pages/auth/LoginPage'
 import { SetupPage } from './pages/auth/SetupPage'
 import { DownloadsPage } from './pages/downloads/DownloadsPage'
 import { PluginViewPage } from './pages/plugins/PluginViewPage'
+import { RadarPage } from './pages/radar/RadarPage'
 import { RssPage } from './pages/rss/RssPage'
 import { SettingsCategoryRoute, SettingsIndex, SettingsLayout } from './pages/settings/SettingsLayout'
 import { WebhooksPage } from './pages/webhooks/WebhooksPage'
@@ -46,6 +47,7 @@ const shellRoute = createRoute({
 const downloadsRoute = createRoute({ getParentRoute: () => shellRoute, path: '/', component: DownloadsPage })
 const rssRoute = createRoute({ getParentRoute: () => shellRoute, path: '/rss', component: RssPage })
 const webhooksRoute = createRoute({ getParentRoute: () => shellRoute, path: '/webhooks', component: WebhooksPage })
+const radarRoute = createRoute({ getParentRoute: () => shellRoute, path: '/dht-radar', component: RadarPage })
 
 const pluginViewRoute = createRoute({
   getParentRoute: () => shellRoute,
@@ -69,7 +71,8 @@ const routeTree = rootRoute.addChildren([
     downloadsRoute,
     rssRoute,
     webhooksRoute,
-      pluginViewRoute,
+    radarRoute,
+    pluginViewRoute,
     settingsRoute.addChildren([settingsIndexRoute, settingsCategoryRoute]),
   ]),
 ])
