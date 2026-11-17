@@ -1,0 +1,74 @@
+/*
+ * IDM 7.0 视觉重设计 —— 设计稿专属外观层（design/ 文件夹）。
+ *
+ * 本文件只定义「外观」：渐变主按钮、胶囊选中、卡片化任务行、彩色文件类型图标、
+ * 柔和阴影与窗口质感。不含任何布局尺寸变更之外的行为逻辑，不改数据流、不改交互。
+ * 深浅两套颜色来自 designSkin.ts 注入的 --fx-* 变量，这里只用语义变量与
+ * 设计稿固定色（#60CD38 / #2D96F6 / #FFC225 / #9542D6）表达视觉。
+ *
+ * 以 html[data-theme] 作作用域，确保浅色/深色各自生效。
+ */
+
+/* ── 主操作按钮：Spring Breeze 绿色渐变（设计稿 New Task / Download 按钮） ──
+ * 不包 @layer：无层级规则优先于 Tailwind 的 utilities 层，
+ * 才能压过 Button 自带的 bg-primary / text-primary-foreground。 */
+.fx-gradient-cta {
+  background-image: linear-gradient(135deg, #7ddc4f 0%, #4bb628 100%);
+  background-color: transparent;
+  color: #fff;
+  box-shadow: 0 1px 2px rgb(74 182 40 / 0.28), inset 0 1px 0 rgb(255 255 255 / 0.22);
+  transition: filter 120ms ease, box-shadow 120ms ease;
+}
+html[data-theme='dark'] .fx-gradient-cta {
+  background-image: linear-gradient(135deg, #79e04e 0%, #4aa829 100%);
+  color: #0d1f08;
+  box-shadow: 0 2px 8px rgb(96 205 56 / 0.22), inset 0 1px 0 rgb(255 255 255 / 0.2);
+}
+.fx-gradient-cta:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.fx-gradient-cta:active:not(:disabled) {
+  filter: brightness(0.96);
+}
+
+/* ── 侧栏选中项：绿色描边胶囊（设计稿左侧 Downloading / Completed 选中态） ──
+ * 只命中导航行的选中态样式类（Sidebar NavRow / 状态行），不影响设置、RSS、标签栏的激活项。 */
+button.bg-nav-selected {
+  box-shadow: inset 0 0 0 1.5px #60cd38;
+}
+
+/* ── 任务行卡片化：浅色浮于浅灰底、深色浮于深底，圆角 + 细描边 ── */
+html[data-theme='light'] [class*='task-row-radius'] {
+  box-shadow: inset 0 0 0 1px rgb(168 168 168 / 0.22);
+}
+html[data-theme='dark'] [class*='task-row-radius'] {
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.06);
+}
+
+/* ── 彩色文件类型图标（设计稿文件徽章：视频蓝 / 音乐紫 / 压缩包黄 / 文档蓝灰 / 图片绿 / 程序紫） ── */
+.fx-file-video { color: #2d96f6; }
+.fx-file-audio { color: #9542d6; }
+.fx-file-archive { color: #d99100; }
+.fx-file-document { color: #5b7fa6; }
+.fx-file-image { color: #4bb628; }
+.fx-file-application { color: #9542d6; }
+.fx-file-diskImage { color: #7a5cc4; }
+.fx-file-mobile { color: #2d96f6; }
+.fx-file-other { color: #a8a8a8; }
+html[data-theme='dark'] .fx-file-video { color: #5cb4ff; }
+html[data-theme='dark'] .fx-file-audio { color: #b57bec; }
+html[data-theme='dark'] .fx-file-archive { color: #ffc225; }
+html[data-theme='dark'] .fx-file-document { color: #8fb3d6; }
+html[data-theme='dark'] .fx-file-image { color: #7ede55; }
+html[data-theme='dark'] .fx-file-application { color: #b57bec; }
+html[data-theme='dark'] .fx-file-diskImage { color: #a78bfa; }
+html[data-theme='dark'] .fx-file-mobile { color: #5cb4ff; }
+html[data-theme='dark'] .fx-file-other { color: #8b979e; }
+
+/* 完成态「文件缺失」时保留半透明弱化（与组件内 opacity-50 叠加，不改逻辑）。 */
+
+/* ── 内容区柔和阴影（窗口质感） ── */
+html[data-theme='light'] main.bg-surface,
+html[data-theme='light'] [data-fx-app-main] {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.6);
+}

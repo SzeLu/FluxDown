@@ -27,7 +27,7 @@ export function KindGlyph({ view, className, tile = false }: { view: DownloadTas
       name={view.name}
       kind={view.kind}
       size={tile ? TILE_GLYPH_SIZE : GLYPH_SIZE}
-      className={cn('text-muted-foreground', view.state === 'completed' && view.fileMissing && 'opacity-50', className)}
+      className={cn('text-muted-foreground', `fx-file-${view.kind}`, view.state === 'completed' && view.fileMissing && 'opacity-50', className)}
     />
   )
   return tile ? <div className="flex size-8 items-center justify-center rounded-md bg-progress-track">{glyph}</div> : glyph

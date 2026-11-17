@@ -24,6 +24,7 @@ export function DownloadsTitleBar() {
         variant={mobile ? 'ghost' : 'primary'}
         iconOnly={mobile}
         icon={Plus}
+        className={mobile ? undefined : 'fx-gradient-cta'}
         aria-label={t(mobile ? 'newDownload' : 'downloadTask')}
         onClick={() =>
           // GPUI `build_new_download_context` 优先取侧栏选中的队列。

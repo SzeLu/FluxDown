@@ -14,6 +14,7 @@ import type { Hsla, ThemeDocument, TokenValue } from '@gpui-theme/types'
 import { colorHex, parseHexColor, relativeLuminance } from '@gpui-theme/value'
 import { accentHex, builtinExtends } from './appearance'
 import type { AppearancePreferences, ThemeModeName } from './appearance'
+import { applyDesignSkin } from './designSkin'
 
 /** 与 Rust `MIN_PRIMARY_CONTRAST` 一致。 */
 const MIN_PRIMARY_CONTRAST = 4.5
@@ -122,7 +123,8 @@ export function toCssVariables(tokens: ReadonlyMap<string, TokenValue>, scale: n
   return vars
 }
 
-/** 一步到位：偏好 + 模式 → CSS 变量。 */
+/** 一步到位：偏好 + 模式 → CSS 变量。最后叠加设计稿皮肤（仅默认浅/深主题生效）。 */
 export function themeVariables(prefs: AppearancePreferences, mode: ThemeModeName): Record<string, string> {
-  return toCssVariables(resolveTokens(prefs, mode), prefs.uiScalePercent / 100)
+  const vars = toCssVariables(resolveTokens(prefs, mode), prefs.uiScalePercent / 100)
+  return applyDesignSkin(vars, prefs, mode)
 }

@@ -764,7 +764,7 @@ export function NewDownloadDialog({ session }: { session: NewDownloadSession }) 
                 {t('cancel')}
               </Button>
               {target ? (
-                <Button variant="primary" disabled={!canSubmit} loading={phase === 'submitting'} onClick={() => void submit(false)}>
+                <Button variant="primary" className="fx-gradient-cta" disabled={!canSubmit} loading={phase === 'submitting'} onClick={() => void submit(false)}>
                   {startLabel}
                 </Button>
               ) : null}

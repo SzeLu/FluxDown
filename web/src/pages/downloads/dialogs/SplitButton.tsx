@@ -32,7 +32,13 @@ export function SplitButton({
   return (
     <div className={cn('inline-flex min-w-0', className)}>
       <Tooltip content={tooltip}>
-        <Button variant={variant} disabled={disabled} loading={loading} onClick={onClick} className="min-w-0 flex-1 rounded-r-none">
+        <Button
+          variant={variant}
+          disabled={disabled}
+          loading={loading}
+          onClick={onClick}
+          className={cn('min-w-0 flex-1 rounded-r-none', variant === 'primary' && 'fx-gradient-cta')}
+        >
           <span className="truncate">{label}</span>
         </Button>
       </Tooltip>
@@ -46,7 +52,7 @@ export function SplitButton({
             disabled={disabled || loading || menu.length === 0}
             title={menuLabel}
             aria-label={menuLabel}
-            className={cn('rounded-l-none', variant === 'outline' && 'border-l-0', divider)}
+            className={cn('rounded-l-none', variant === 'outline' && 'border-l-0', divider, variant === 'primary' && 'fx-gradient-cta')}
           >
             <Icon icon={ChevronDown} />
           </Button>
