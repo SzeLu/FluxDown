@@ -561,12 +561,12 @@ fi
 # 正式 release profile 是 opt-level=3 + fat LTO + codegen-units=1，链接期峰值很高；
 # 8GB 级机器上并行 rustc 很容易被 OOM killer 杀掉。这里只覆盖本次 cargo 进程的环境：
 # 串行编译、thin LTO（跨 crate 内联保留，但按模块并行/分块）、16 个 codegen 单元、
-# O2，并关闭增量与调试信息。产物不是发布等价物，只用于本机验证 / 出包。
+# O2，并默认关闭增量与调试信息（CARGO_INCREMENTAL=1 可恢复）。产物不是发布等价物，只用于本机验证 / 出包。
 LOW_MEM_ENV=()
 if (( LOW_MEMORY )); then
   LOW_MEM_ENV=(
     CARGO_BUILD_JOBS="${JOBS_ARG:-1}"
-    CARGO_INCREMENTAL=0
+    CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
     CARGO_PROFILE_RELEASE_LTO=thin
     CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
     CARGO_PROFILE_RELEASE_OPT_LEVEL=2
@@ -818,7 +818,7 @@ info "包格式   : ${SELECTED[*]}"
 info "版本     : ${VERSION_VALUE}  (${VERSION_FROM})"
 info "输出目录 : build/installer"
 if (( LOW_MEMORY )); then
-  info "编译模式 : 低内存（-j${JOBS_ARG:-1}，thin LTO，CGU 16，O2，无增量）"
+  info "编译模式 : 低内存（-j${JOBS_ARG:-1}，thin LTO，CGU 16，O2，增量默认关）"
 elif [[ -n "$JOBS_ARG" ]]; then
   info "编译模式 : -j${JOBS_ARG}"
 fi

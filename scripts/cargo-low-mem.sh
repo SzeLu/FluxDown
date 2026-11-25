@@ -9,7 +9,7 @@
 #
 # 相对默认设置的变化（都是进程级环境变量，不改 Cargo.toml）：
 #   CARGO_BUILD_JOBS=1                并行 rustc 数量降为 1（峰值 = 单个 crate + 一次链接）
-#   CARGO_INCREMENTAL=0               关闭增量编译（省内存与磁盘）
+#   CARGO_INCREMENTAL=0               关闭增量编译（省内存与磁盘；需要增量时设 CARGO_INCREMENTAL=1）
 #   CARGO_PROFILE_RELEASE_LTO=thin    替代 fat LTO：保留跨 crate 内联，但按模块分块，
 #   CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
 #   CARGO_PROFILE_RELEASE_OPT_LEVEL=2 替代 O3。链接期内存峰值大幅下降
@@ -44,7 +44,7 @@ USAGE
 fi
 
 export CARGO_BUILD_JOBS="${MEM_JOBS:-${CARGO_BUILD_JOBS:-1}}"
-export CARGO_INCREMENTAL=0
+export CARGO_INCREMENTAL="${CARGO_INCREMENTAL:-0}"
 export CARGO_PROFILE_RELEASE_LTO="${CARGO_PROFILE_RELEASE_LTO:-thin}"
 export CARGO_PROFILE_RELEASE_CODEGEN_UNITS="${CARGO_PROFILE_RELEASE_CODEGEN_UNITS:-16}"
 export CARGO_PROFILE_RELEASE_OPT_LEVEL="${CARGO_PROFILE_RELEASE_OPT_LEVEL:-2}"
