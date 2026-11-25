@@ -9,7 +9,8 @@ mod ui;
 use std::{future::Future, pin::Pin, rc::Rc, sync::Arc};
 
 use fluxdown_protocol::{
-    AgentEvent, AgentSnapshot, ApplicationErrorCode, ErrorReason, RpcErrorData, ServiceEvent,
+    AgentEvent, AgentSnapshot, ApplicationErrorCode, ErrorReason, PluginFailureDetail,
+    RpcErrorData, ServiceEvent,
 };
 use fluxdown_ui_components::segmented_tabs;
 use fluxdown_ui_components::toast;
@@ -24,7 +25,10 @@ use gpui_component::{WindowExt as _, h_flex, v_flex};
 use components::plugin_live::LivePlugins;
 use controller::{COMPONENT_KINDS, component_slot};
 pub use controller::{ExtensionsController, ExtensionsSignal};
-use pages::{managed_components::ComponentUi, plugins::PluginsUi};
+use pages::{
+    managed_components::{ComponentMirrorUi, ComponentUi},
+    plugins::PluginsUi,
+};
 
 pub type PortFuture<T> = Pin<Box<dyn Future<Output = Result<T, RpcErrorData>> + Send + 'static>>;
 
@@ -54,6 +58,12 @@ pub trait ExtensionsPort: Send + Sync {
         method: &'static str,
         params: serde_json::Value,
     ) -> PortFuture<serde_json::Value>;
+
+    fn feedback(
+        &self,
+        identity: String,
+        report: Option<serde_json::Value>,
+    ) -> PortFuture<serde_json::Value>;
 }
 
 /// 扩展分类的子页：插件、站点默认插件与受管组件。
@@ -75,6 +85,7 @@ pub struct ExtensionsView {
     last_error: Option<String>,
     plugins: PluginsUi,
     components: [ComponentUi; 2],
+    component_mirror: ComponentMirrorUi,
     plugin_view_factory: Option<PluginViewFactory>,
     /// 打开中的插件对话框跟随的实时插件列表。
     live_plugins: Entity<LivePlugins>,
@@ -108,6 +119,7 @@ impl ExtensionsView {
             last_error: None,
             plugins: PluginsUi::default(),
             components: [ComponentUi::default(), ComponentUi::default()],
+            component_mirror: ComponentMirrorUi::default(),
             plugin_view_factory: None,
             live_plugins: cx.new(|_| LivePlugins::default()),
         }
@@ -258,6 +270,36 @@ pub(crate) fn error_text(translator: &Translator, error: &RpcErrorData) -> Strin
         | ApplicationErrorCode::Internal => "localServiceActionFailed",
     });
     translator.text(key).to_owned()
+}
+
+fn plugin_detail_text(translator: &Translator, detail: &PluginFailureDetail) -> Option<String> {
+    use PluginFailureDetail as Detail;
+
+    let key = match detail {
+        Detail::ManifestUnreadable => "pluginDiagnosticManifestUnreadable",
+        Detail::ManifestUnknownField => "pluginDiagnosticManifestUnknownField",
+        Detail::ManifestJsonInvalid => "pluginDiagnosticManifestJsonInvalid",
+        Detail::ManifestIdentityInvalid => "pluginDiagnosticManifestIdentityInvalid",
+        Detail::ManifestNameMissing => "pluginDiagnosticManifestNameMissing",
+        Detail::ManifestVersionInvalid => "pluginDiagnosticManifestVersionInvalid",
+        Detail::ManifestMinAppVersionInvalid => "pluginDiagnosticManifestMinAppVersionInvalid",
+        Detail::ManifestUnknownPermission => "pluginDiagnosticManifestUnknownPermission",
+        Detail::ManifestAuthPermissionMissing => "pluginDiagnosticManifestAuthPermissionMissing",
+        Detail::ScriptCompileFailed => "pluginDiagnosticScriptCompileFailed",
+        Detail::ScriptCompileFailedAt { line, column } => {
+            return Some(translator.text_with(
+                "pluginDiagnosticScriptCompileFailedAt",
+                &[("line", &line.to_string()), ("column", &column.to_string())],
+            ));
+        }
+        Detail::MissingFile { path } => {
+            return Some(translator.text_with("pluginDiagnosticMissingFile", &[("path", path)]));
+        }
+        Detail::LoadFailed => "pluginDiagnosticLoadFailed",
+        Detail::NotDevPlugin => "pluginDiagnosticNotDevPlugin",
+        Detail::Unknown => return None,
+    };
+    Some(translator.text(key).to_owned())
 }
 
 impl Render for ExtensionsView {

@@ -5,6 +5,7 @@
 pub mod agent;
 pub mod app_icon;
 pub mod aria2_options;
+pub mod browser_extension;
 pub mod capture_link;
 pub mod cloud_notify;
 pub mod coalesce;
@@ -55,7 +56,8 @@ pub use agent::{
     PlatformIntegrationDto, PlatformOpenPathParams, PlatformToggleParams,
     PlatformUrlProtocolParams, PluginFavoriteResultDto, PluginFavoriteSetRequest,
     PluginFavoritesDto, PowerAction, PowerArmParams, PowerLowSpeedCondition, PowerStatusDto,
-    PrivatePluginInstallRequest, PrivatePluginListDto, ReleaseNoteDto, RemoteCommandAction,
+    PrivatePluginInstallRequest, PrivatePluginListDto, REMOTE_COMMAND_MANY_MAX, ReleaseNoteDto,
+    RemoteCommandAction, RemoteCommandFailure, RemoteCommandManyParams, RemoteCommandManyResult,
     RemoteCommandParams, RemoteDispatchParams, RemoteDispatchResult, RemoteTaskDto,
     RemoteTaskStatus, ShellStatusDto, SyncLocalOnlyParams, SyncStatusDto, TrayUnavailableReason,
     UpdateCheckParams, UpdateFailure, UpdateInstallKind, UpdateManualReason, UpdatePhase,
@@ -71,6 +73,12 @@ pub use cloud_notify::{
     CloudNotifyTelegramBindDto, CloudNotifyTelegramBindStatusDto,
     CloudNotifyTelegramBindStatusParams, CloudNotifyTestResult, CloudNotifyUsageDto, TaskNoticeDto,
     TaskNoticeTaskDto,
+};
+pub use daemon::{
+    AddTaskWebSeedParams, BT_FILE_PRIORITY_HIGH, BT_FILE_PRIORITY_MAXIMUM, BT_FILE_PRIORITY_NORMAL,
+    BT_FILE_PRIORITY_SKIP, BtFilePriorityDto, BtFilesDto, BtPortMappingDto, BtPortStatusDto,
+    BtTaskFileDto, BtWebSeedDto, MoveTaskStorageParams, RenameBtFileParams, SetTaskBtLimitsParams,
+    SetTaskFilePrioritiesParams, SetTaskSuperSeedingParams,
 };
 pub use daemon::{
     ApiInfo, BT_GUARD_ENTRY_ACTIONS, BT_GUARD_LAYERS, BT_GUARD_LIST_DEFAULT_LIMIT,
@@ -133,12 +141,6 @@ pub use daemon::{
     UpdateQueueRequest, WebhookDeliveriesResponse, WebhookDeliveryDto, WebhookPresetDto,
     WebhookSimulateResponse, WebhookTestRequest, WebhookTestResponse, WsClientMsg, WsServerMsg,
 };
-pub use daemon::{
-    BT_FILE_PRIORITY_HIGH, BT_FILE_PRIORITY_MAXIMUM, BT_FILE_PRIORITY_NORMAL,
-    BT_FILE_PRIORITY_SKIP, BtFilePriorityDto, BtFilesDto, BtPortMappingDto, BtPortStatusDto,
-    BtTaskFileDto, BtWebSeedDto, MoveTaskStorageParams, RenameBtFileParams, SetTaskBtLimitsParams,
-    SetTaskFilePrioritiesParams, SetTaskSuperSeedingParams,
-};
 pub use daemon_config::{
     BT_GUARD_DOWNLOADING_ACTIONS, BT_GUARD_MODES, BT_MSE_MODES, BT_PIECE_ORDERS,
     BT_SEED_LIMIT_OPERATORS, BT_SEED_THEN_ACTIONS, BT_SEED_TIME_UNITS, DAEMON_CONFIG_FIELDS,
@@ -151,7 +153,7 @@ pub use daemon_config::{
 pub use error::{
     APPLICATION_ERROR_CODE, ApplicationErrorCode, ErrorReason, INTERNAL_ERROR_CODE,
     INVALID_PARAMS_CODE, INVALID_REQUEST_CODE, METHOD_NOT_FOUND_CODE, PARSE_ERROR_CODE,
-    RpcErrorData, RpcErrorObject,
+    PluginFailureDetail, RpcErrorData, RpcErrorObject,
 };
 pub use event::{
     AgentEvent, AgentSnapshot, DaemonEvent, DaemonSnapshot, EventFrame, FrameVerdict, ServiceEvent,

@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.fluxdown.app.R
 import com.fluxdown.app.actions.LocalTaskActions
+import com.fluxdown.app.data.DeviceSettings
 import com.fluxdown.core.capture.TorrentFile
 import com.fluxdown.app.feature.settings.general.categoryDisplayName
 import com.fluxdown.app.feature.settings.general.categoryIcon
@@ -47,9 +48,15 @@ import com.fluxdown.app.i18n.str
 import com.fluxdown.app.nav.SheetRoute
 import com.fluxdown.app.shell.LocalAppContainer
 import com.fluxdown.app.shell.hostState
+import com.fluxdown.app.ui.TaskInfoRow
+import com.fluxdown.app.ui.defaultLocalSaveDir
+import com.fluxdown.app.ui.externalLocalDirectory
 import com.fluxdown.app.ui.fileCategory
+import com.fluxdown.app.ui.isLocalDirWritable
 import com.fluxdown.app.ui.label
 import com.fluxdown.app.ui.launchDocumentPicker
+import com.fluxdown.app.ui.rememberTaskInfoExport
+import com.fluxdown.app.ui.rememberLocalDirectoryPicker
 import com.fluxdown.core.host.ImportRules
 import com.fluxdown.core.host.groupImportBatches
 import com.fluxdown.core.host.isError
@@ -137,6 +144,16 @@ private fun NewDownloadSheetImpl(visible: Boolean, route: SheetRoute.NewDownload
     val haptics = FluxTheme.haptics
     val context = LocalContext.current
     val form = remember { NewDownloadState.create(route.prefill, container.store.state.value, route.external, route.targetId) }
+    val hostRef by container.host.collectAsStateWithLifecycle()
+    val requestedLocalDir = form.saveDir.takeIf { form.hasExternalSaveDir && hostRef is HostRef.Local }
+    var localConfirmation by remember(requestedLocalDir) { mutableStateOf<LocalDirectoryConfirmation?>(null) }
+    LaunchedEffect(requestedLocalDir) {
+        if (requestedLocalDir != null) {
+            val resolved = withContext(Dispatchers.IO) { externalLocalDirectory(context).forConfirmation(requestedLocalDir) }
+            localConfirmation = LocalDirectoryConfirmation(requestedLocalDir, resolved)
+        }
+    }
+    val needsDirectory = requestedLocalDir != null && localConfirmation?.path == null
     LaunchedEffect(route) {
         // 打开期间的后续唤起追加进同一表单（批量协议唤起逐条到达）
         route.external?.let(form::addExternal)
@@ -191,7 +208,7 @@ private fun NewDownloadSheetImpl(visible: Boolean, route: SheetRoute.NewDownload
     fun rememberMode() {
         if (target == null) {
             val session = container.session
-            val mode = form.rememberedMode()
+            val mode = form.rememberedMode() ?: return
             container.appScope.launch {
                 try {
                     session.patchPreferences(
@@ -221,10 +238,9 @@ private fun NewDownloadSheetImpl(visible: Boolean, route: SheetRoute.NewDownload
             haptics.reject()
             return
         }
-        // 本机主机：目录不可写（分区存储外 / 拼错路径）在提交前拦住，避免引擎报 EPERM
-        if (container.host.value is com.fluxdown.core.model.HostRef.Local && !com.fluxdown.app.ui.isLocalDirWritable(form.saveDir)) {
+        val saveDir = writableDownloadDirectory(context, container.host.value, form, localConfirmation) ?: run {
             haptics.reject()
-            overlays.toast(context.str(R.string.mobileSaveDirNotWritable, "dir" to form.saveDir.trim()), FluxToastKind.Error)
+            overlays.toast(context.str(R.string.mobileSaveDirNotWritable, "dir" to (localConfirmation?.path ?: form.saveDir.trim())), FluxToastKind.Error)
             return
         }
         if (!checksumValid(form)) {
@@ -232,7 +248,7 @@ private fun NewDownloadSheetImpl(visible: Boolean, route: SheetRoute.NewDownload
             advancedOpen = true
             return
         }
-        val requests = form.buildRequests(startPaused, queueId, manualProxyUrl(state.config))
+        val requests = form.buildRequests(startPaused, queueId, manualProxyUrl(state.config), saveDir)
         val batches = groupImportBatches(requests)
         if (requests.size > ImportRules.CHUNK_SIZE) {
             // 多块导入：交给进程级导入中心，进度 / 取消在下载页顶部，关闭本 Sheet 不影响它；汇总提示由 ImportEffects 给出
@@ -320,11 +336,13 @@ private fun NewDownloadSheetImpl(visible: Boolean, route: SheetRoute.NewDownload
         title = str(R.string.newDownload),
         header = { FluxSheetHeader(title = str(R.string.newDownload), onClose = ::requestClose) },
         footer = {
-            NewDownloadFooter(form, target, ::submit, onSubmitRemote = { target?.let(::submitRemote) })
+            NewDownloadFooter(form, target, needsDirectory, ::submit, onSubmitRemote = { target?.let(::submitRemote) })
         },
     ) {
         NewDownloadContent(
             form, targets, target,
+            requestedLocalDir = requestedLocalDir,
+            localConfirmation = localConfirmation,
             onOpenAdvanced = { advancedOpen = true },
             // 本机建了任务：记住分类模式、拉起前台服务；表单里没有待提交的链接时关闭（同 iOS `importTorrents`）
             onTorrentImported = {
@@ -375,6 +393,21 @@ private fun checksumHexValid(hex: String): Boolean {
 
 private fun checksumValid(form: NewDownloadState): Boolean = !form.single || checksumHexValid(form.advanced.checksumHex)
 
+private data class LocalDirectoryConfirmation(val requested: String, val path: String?)
+
+private fun writableDownloadDirectory(
+    context: Context,
+    host: HostRef,
+    form: NewDownloadState,
+    confirmation: LocalDirectoryConfirmation?,
+): String? {
+    val entered = form.saveDir.trim()
+    if (host !is HostRef.Local) return entered
+    if (!form.hasExternalSaveDir) return entered.takeIf(::isLocalDirWritable)
+    val path = confirmation?.takeIf { it.requested == form.saveDir }?.path ?: return null
+    return path.takeIf(externalLocalDirectory(context)::prepareConfirmed)
+}
+
 // ── N1 正文 ───────────────────────────────────────────────────────────────
 
 @Composable
@@ -382,6 +415,8 @@ private fun NewDownloadContent(
     form: NewDownloadState,
     targets: List<DispatchTarget>,
     target: DispatchTarget?,
+    requestedLocalDir: String?,
+    localConfirmation: LocalDirectoryConfirmation?,
     onOpenAdvanced: () -> Unit,
     onTorrentImported: () -> Unit,
 ) {
@@ -412,6 +447,7 @@ private fun NewDownloadContent(
     val noEntries = form.entries.isEmpty()
     val hasText = form.urlText.isNotBlank()
     val busy = form.submitting
+    val exportTaskInfo = rememberTaskInfoExport()
     // 重命名 / 首条链接变化 → 自动模式下按预测目录跟随（用户手改过目录则不覆盖）
     val predictedDir = form.predictedDir()
     LaunchedEffect(predictedDir) { form.syncAuto() }
@@ -439,10 +475,9 @@ private fun NewDownloadContent(
             haptics.reject()
             return@rememberLauncherForActivityResult
         }
-        // 本机主机：目录不可写在提交前拦住（同 `submit`）
-        if (container.host.value is HostRef.Local && !com.fluxdown.app.ui.isLocalDirWritable(form.saveDir)) {
+        val saveDir = writableDownloadDirectory(context, container.host.value, form, localConfirmation) ?: run {
             haptics.reject()
-            overlays.toast(context.str(R.string.mobileSaveDirNotWritable, "dir" to form.saveDir.trim()), FluxToastKind.Error)
+            overlays.toast(context.str(R.string.mobileSaveDirNotWritable, "dir" to (localConfirmation?.path ?: form.saveDir.trim())), FluxToastKind.Error)
             return@rememberLauncherForActivityResult
         }
         val queues = container.store.state.value.queues
@@ -451,7 +486,7 @@ private fun NewDownloadContent(
         container.appScope.launch {
             val created = try {
                 TorrentImport.submit(
-                    context, container, overlays, taskActions::errorText, uris, form.saveDir, queueId, startPaused = false,
+                    context, container, overlays, taskActions::errorText, uris, saveDir, queueId, startPaused = false,
                 )
             } finally {
                 importingTorrent = false
@@ -464,13 +499,36 @@ private fun NewDownloadContent(
             }
         }
     }
-    val pickDirectory = com.fluxdown.app.ui.rememberLocalDirectoryPicker { path ->
+    val externalDirectory = remember(context, form.hasExternalSaveDir) {
+        if (form.hasExternalSaveDir) externalLocalDirectory(context) else null
+    }
+    val pickDirectory = rememberLocalDirectoryPicker(externalDirectory) { path ->
         if (container.host.value is HostRef.Local && target == null && !form.submitting) {
             form.setSaveDirManually(path)
         }
     }
 
     Column(Modifier.padding(top = 2.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        if (hostRef is HostRef.Local && target == null) {
+            val settings = remember(context) { DeviceSettings.of(context) }
+            val appDir = remember(context) { defaultLocalSaveDir(context).path }
+            if (host.value.needsPublicDownloadGuide(hostRef, settings.downloadFolderGuideDone, appDir)) {
+                PublicDownloadGuide(
+                    enabled = !busy && !importingTorrent,
+                    onSavingChange = { form.submitting = it },
+                    onSaved = form::adoptDefaultSaveDir,
+                    onSkip = {
+                        if (!form.submitting && !importingTorrent) {
+                            container.store.state.value.skipPublicDownloadGuide(
+                                container.host.value, settings.downloadFolderGuideDone, appDir,
+                                settings::finishDownloadFolderGuide,
+                            )
+                        }
+                    },
+                )
+            }
+        }
+
         FluxText(str(R.string.batchDownloadDesc), style = type.sm, color = c.inkMuted)
 
         // 链接区
@@ -529,7 +587,8 @@ private fun NewDownloadContent(
                 size = ButtonSize.Sm,
                 icon = FluxIcons.FileUp,
                 fullWidth = true,
-                enabled = !busy && !importingTorrent && target == null,
+                enabled = !busy && !importingTorrent && target == null &&
+                    (requestedLocalDir == null || localConfirmation?.path != null),
             )
             // 种子只能在当前主机建任务：「下载到」选了其他设备时禁用并说明（同 iOS `torrentButton(remote:)`）
             if (target != null) {
@@ -561,6 +620,15 @@ private fun NewDownloadContent(
                     }
                 }
             }
+            if (form.entries.size > 1) {
+                FluxButton(
+                    str(R.string.exportTaskInfoTxt),
+                    { exportTaskInfo(form.entries.map { TaskInfoRow(it.batchExportName(), it.url, it.batchExportSize()) }) },
+                    size = ButtonSize.Sm,
+                    icon = FluxIcons.FileText,
+                    enabled = !busy,
+                )
+            }
             if (form.entries.size > 3) {
                 FluxText(
                     str(R.string.mobileNewDownloadPreviewMore, "n" to (form.entries.size - 3)),
@@ -591,8 +659,9 @@ private fun NewDownloadContent(
         CategorySelect(form, enabled = !busy, remoteHost = remoteHost)
 
         // 保存目录
-        val saveDirShown = remember(form.saveDir, remoteHost) {
-            if (remoteHost) form.saveDir else com.fluxdown.app.ui.friendlyLocalPath(context, form.saveDir)
+        val displayedDir = if (requestedLocalDir == null) form.saveDir else localConfirmation?.path.orEmpty()
+        val saveDirShown = remember(displayedDir, remoteHost) {
+            if (remoteHost) displayedDir else com.fluxdown.app.ui.friendlyLocalPath(context, displayedDir)
         }
         FluxField(
             value = saveDirShown,
@@ -600,10 +669,14 @@ private fun NewDownloadContent(
             label = str(R.string.saveDir),
             mono = remoteHost,
             readOnly = !remoteHost,
-            error = if (form.saveDirValid) null else str(R.string.mobileSaveDirInvalid),
+            error = when {
+                localConfirmation != null && localConfirmation.path == null -> str(R.string.mobileLocalFolderReadFailed)
+                requestedLocalDir == null && !form.saveDirValid -> str(R.string.mobileSaveDirInvalid)
+                else -> null
+            },
             enabled = !busy,
             trailing = if (remoteHost) null else ({
-                FluxFieldAction(FluxIcons.FolderOpen, str(R.string.browse), onClick = { pickDirectory(form.saveDir) })
+                FluxFieldAction(FluxIcons.FolderOpen, str(R.string.browse), onClick = { pickDirectory(displayedDir) })
             }),
         )
 
@@ -799,6 +872,7 @@ private fun CategorySelect(form: NewDownloadState, enabled: Boolean, remoteHost:
     val matched = form.autoMatched()
     val auto = str(R.string.saveDirCategoryAuto)
     val none = str(R.string.saveDirCategoryNone)
+    val noneHint = if (form.hasExternalSaveDir) null else str(R.string.saveDirCategoryNoneDesc)
     val items = buildList {
         add(
             FluxMenuItem.Action(
@@ -814,7 +888,7 @@ private fun CategorySelect(form: NewDownloadState, enabled: Boolean, remoteHost:
                 label = none,
                 onClick = { form.selectMode(SaveDirMode.None) },
                 icon = FluxIcons.FolderOpen,
-                hint = str(R.string.saveDirCategoryNoneDesc),
+                hint = noneHint,
                 checked = mode == SaveDirMode.None,
             ),
         )
@@ -848,7 +922,7 @@ private fun CategorySelect(form: NewDownloadState, enabled: Boolean, remoteHost:
         label = str(R.string.saveDirCategory),
         hint = when (mode) {
             SaveDirMode.Auto -> str(R.string.saveDirCategoryAutoDesc)
-            SaveDirMode.None -> str(R.string.saveDirCategoryNoneDesc)
+            SaveDirMode.None -> noneHint
             // 所选分类的目录已显示在下方「保存目录」行
             is SaveDirMode.Category -> null
         },
@@ -975,6 +1049,7 @@ private fun readText(context: Context, uri: Uri): String? = runCatching {
 private fun NewDownloadFooter(
     form: NewDownloadState,
     target: DispatchTarget?,
+    needsDirectory: Boolean,
     submit: (startPaused: Boolean, queueId: String) -> Unit,
     onSubmitRemote: () -> Unit,
 ) {
@@ -1031,7 +1106,7 @@ private fun NewDownloadFooter(
                     { submit(true, queueId) },
                     modifier = Modifier.weight(1f),
                     icon = FluxIcons.Clock,
-                    enabled = !form.submitting,
+                    enabled = !form.submitting && !needsDirectory,
                 )
                 FluxSplitButton(
                     label = startLabel,
@@ -1041,7 +1116,7 @@ private fun NewDownloadFooter(
                     },
                     modifier = Modifier.weight(1.4f),
                     icon = FluxIcons.ArrowDown,
-                    enabled = !form.submitting,
+                    enabled = !form.submitting && !needsDirectory,
                     menuLabel = moreLabel,
                     menuActions = a11y,
                 )

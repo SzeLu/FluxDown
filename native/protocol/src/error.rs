@@ -15,6 +15,9 @@ pub const INTERNAL_ERROR_CODE: i32 = -32603;
 /// FluxDown 应用错误使用的 JSON-RPC code。
 pub const APPLICATION_ERROR_CODE: i32 = -32000;
 
+/// Marker for HTTP 403 responses when RSS image proxy validation is unavailable.
+pub const RSS_IMAGE_PROXY_UNVERIFIABLE_HEADER: &str = "x-fluxdown-rss-image-proxy-unverifiable";
+
 /// 稳定应用错误码。
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -101,12 +104,20 @@ pub enum ErrorReason {
     TaskStateConflict,
     /// 远程任务：只有目标设备可以上报该任务状态。
     TaskDeviceMismatch,
+    /// 远程任务：FluxCloud 已没有这条记录（已被其他设备删除或过期清理）；agent 已把它从投影移除。
+    RemoteTaskGone,
     /// 保存目录在目标设备上不可用（路径风格不符 / 非绝对路径 / 无法创建）。
     SaveDirUnavailable,
     /// 删除任务：文件正被其他程序占用，无法删除；任务记录已保留。
     TaskFilesInUse,
     /// 删除任务：任务文件无法删除（权限 / 磁盘 / 清理超时等）；任务记录已保留。
     TaskFilesNotDeleted,
+    /// 文件清理尚未完成，必须从原保存位置恢复清理后才能编辑路径。
+    TaskFileClearPending,
+    /// 重新下载：浏览器接管的请求必须由浏览器重新发起。
+    BrowserRequestRequired,
+    /// RSS 图片：代理出口无法校验图片目标。
+    RssImageProxyUnverifiable,
     /// 局域网配对：配对码错误或已过期。
     PairingCodeInvalid,
     /// 局域网配对：配对会话不存在或已过期。
@@ -188,6 +199,34 @@ pub enum ErrorReason {
     Unknown,
 }
 
+/// Safe plugin diagnostics; clients localize the kind and interpolate only these arguments.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PluginFailureDetail {
+    ManifestUnreadable,
+    ManifestUnknownField,
+    ManifestJsonInvalid,
+    ManifestIdentityInvalid,
+    ManifestNameMissing,
+    ManifestVersionInvalid,
+    ManifestMinAppVersionInvalid,
+    ManifestUnknownPermission,
+    ManifestAuthPermissionMissing,
+    ScriptCompileFailed,
+    ScriptCompileFailedAt {
+        line: u32,
+        column: u32,
+    },
+    MissingFile {
+        path: String,
+    },
+    LoadFailed,
+    NotDevPlugin,
+    #[serde(other)]
+    Unknown,
+}
+
 /// FluxDown 应用错误的机器可读详情。
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -201,6 +240,9 @@ pub struct RpcErrorData {
     pub revision: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<ErrorReason>,
+    /// Redacted plugin operation details for display and copying.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_detail: Option<PluginFailureDetail>,
 }
 
 impl RpcErrorData {
@@ -213,6 +255,7 @@ impl RpcErrorData {
             field: None,
             revision: None,
             reason: None,
+            plugin_detail: None,
         }
     }
 

@@ -45,6 +45,7 @@ import type {
   DhtRadarSetConfigParams,
   DhtRadarStatsDto,
   Ed2kServerSubRefreshResponse,
+  FsDefaultFileExistsParams,
   FsListParams,
   FsListResponse,
   GroupDeleteParams,
@@ -124,6 +125,7 @@ import type {
   BtStatusDto,
   BtFilesDto,
   BtPortStatusDto,
+  AddTaskWebSeedParams,
   MoveTaskStorageParams,
   RenameBtFileParams,
   SetTaskBtLimitsParams,
@@ -209,6 +211,8 @@ const task = {
   setBtLimits: (params: SetTaskBtLimitsParams) => call<OkResult>(METHOD.DAEMON_TASK_SET_BT_LIMITS, params),
   setSuperSeeding: (params: SetTaskSuperSeedingParams) =>
     call<OkResult>(METHOD.DAEMON_TASK_SET_SUPER_SEEDING, params),
+  addWebSeed: (params: AddTaskWebSeedParams) =>
+    call<OkResult>(METHOD.DAEMON_TASK_ADD_WEB_SEED, params),
   reannounce: (params: TaskIdParams) => call<OkResult>(METHOD.DAEMON_TASK_REANNOUNCE, params),
   delete: (params: TaskDeleteParams) => call<OkResult>(METHOD.DAEMON_TASK_DELETE, params),
   pauseAll: () => call<OkResult>(METHOD.DAEMON_TASK_PAUSE_ALL),
@@ -317,6 +321,7 @@ const runtime = {
 const fs = {
   /** 列举服务端目录（仅子目录）；`params` 省略 = 默认保存目录。 */
   list: (params?: FsListParams) => call<FsListResponse>(METHOD.DAEMON_FS_LIST, params),
+  defaultFileExists: (params: FsDefaultFileExistsParams) => call<boolean>(METHOD.DAEMON_FS_DEFAULT_FILE_EXISTS, params),
 };
 
 const rss = {
