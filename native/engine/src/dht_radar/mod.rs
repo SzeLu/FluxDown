@@ -307,19 +307,26 @@ impl Radar {
         }
     }
 
-    /// 更新容量与元数据开关（端口变化需要重启才能生效）。
+    /// 更新配置并让开 / 关与端口变更立即生效（容量等只在新建时读取的字段仍需下次启动）。
     pub fn update_config(self: &Arc<Self>, config: RadarConfig) -> Result<(), String> {
+        let was_running = self.is_running();
         let restart = {
             let mut current = store::lock(&self.config);
-            let restart = current.port != config.port && self.is_running();
+            // 只有仍要采集时才需要为端口变更重启；关闭时绝不能走到 start()。
+            let restart = was_running && config.enabled && current.port != config.port;
             *current = config;
             restart
         };
-        if config.enabled && !self.is_running() {
-            self.start()?;
+        if !config.enabled {
+            if was_running {
+                self.stop();
+            }
+            return Ok(());
         }
         if restart {
             self.stop();
+        }
+        if !self.is_running() {
             self.start()?;
         }
         Ok(())
@@ -468,7 +475,51 @@ pub fn hex(infohash: &InfoHash) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{PROACTIVE_BURST, QueryBudget};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::store;
+    use super::{PROACTIVE_BURST, QueryBudget, Radar, RadarConfig};
+
+    /// 模拟一个已启动的雷达：只置运行位与停止句柄，不绑 UDP、不发真实 DHT 报文。
+    fn running_radar() -> (Arc<Radar>, Arc<AtomicBool>) {
+        let radar = Radar::new(RadarConfig {
+            enabled: true,
+            ..RadarConfig::default()
+        });
+        let stop = Arc::new(AtomicBool::new(false));
+        *store::lock(&radar.stop) = Some(Arc::clone(&stop));
+        radar.running.store(true, Ordering::SeqCst);
+        (radar, stop)
+    }
+
+    #[test]
+    fn disabling_config_stops_collection() {
+        let (radar, stop) = running_radar();
+        let mut config = radar.config();
+        config.enabled = false;
+        radar.update_config(config).expect("disable radar");
+
+        assert!(!radar.is_running(), "disabled radar must report stopped");
+        assert!(
+            stop.load(Ordering::SeqCst),
+            "collector threads must receive the stop signal"
+        );
+        assert!(!radar.config().enabled);
+    }
+
+    #[test]
+    fn disabling_config_with_port_change_never_restarts() {
+        let (radar, stop) = running_radar();
+        let mut config = radar.config();
+        config.enabled = false;
+        config.port = 12345;
+        radar.update_config(config).expect("disable radar");
+
+        assert!(!radar.is_running());
+        assert!(stop.load(Ordering::SeqCst));
+        assert_eq!(radar.config().port, 12345);
+    }
 
     #[test]
     fn query_budget_allows_a_burst_then_throttles() {

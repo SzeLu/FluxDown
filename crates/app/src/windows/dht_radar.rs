@@ -392,11 +392,21 @@ impl DhtRadarView {
                 Ok(dto) if dto.count > 0 => {
                     let count = dto.count;
                     let text = dto.text;
-                    cx.background_executor()
+                    let path_display = path.display().to_string();
+                    // 写盘失败不能吞掉：调用方要靠 `None` 区分失败并给出提示。
+                    match cx
+                        .background_executor()
                         .spawn(async move { std::fs::write(&path, text) })
                         .await
-                        .ok()
-                        .map(|()| count)
+                    {
+                        Ok(()) => Some(count),
+                        Err(error) => {
+                            log::warn!(
+                                "dht radar export write failed: {error}; path: {path_display}"
+                            );
+                            None
+                        }
+                    }
                 }
                 // 没有存档时也把选择的路径当成一次成功的空导出说清楚。
                 Ok(_) => Some(0),

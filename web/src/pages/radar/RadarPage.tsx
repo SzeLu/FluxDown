@@ -1,15 +1,15 @@
 // DHT 种子雷达页（对齐 GPUI crates/app/src/windows/dht_radar.rs 的功能面）。
 // 纯前端 + 既有 daemon.dht.radar.* RPC：采集开关 / 统计 / 发现列表 / 排序搜索 / 清空 / 导出导入。
-// 后端与桌面端一行未改；样式沿用 Web 设计皮肤（--fx-* 语义 token）。
+// 功能面与桌面 GPUI 页一致；样式沿用 Web 设计皮肤（--fx-* 语义 token）。
 //
 // stats / list 非快照字段，本页自行轮询（页面挂载且有连接时），与 RSS / 详情页一致。
 
-import { ArrowDownToLine, Clipboard, Copy, Download, RefreshCw, Search, Trash2, Wifi } from 'lucide-react'
+import { Copy, Download, FileDown, FileUp, RefreshCw, Search, Trash2, Wifi } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ChangeEvent, ReactNode } from 'react'
 import { useT } from '../../i18n'
 import { cn } from '../../lib/cn'
-import { rpc } from '../../lib/rpc'
+import { RpcError, rpc } from '../../lib/rpc'
 import { toastRpcError } from '../../lib/rpcToast'
 import type { DhtRadarConfigDto, DhtRadarItemDto, DhtRadarStatsDto } from '../../lib/rpc'
 import { TitleBarSlot } from '../../shell'
@@ -58,6 +58,14 @@ function ConfigRow({ label, children }: { label: string; children: ReactNode }) 
 
 export function RadarPage() {
   const t = useT()
+  // 旧版常驻 daemon 不认识导入导出方法时，给出可操作的提示而不是通用 RPC 失败。
+  const toastActionError = (error: unknown) => {
+    if (error instanceof RpcError && error.is('unsupported')) {
+      toast.error(t('dhtRadarRestartRequired'))
+    } else {
+      toastRpcError(error)
+    }
+  }
   const [stats, setStats] = useState<DhtRadarStatsDto>(EMPTY_STATS)
   const [config, setConfig] = useState<DhtRadarConfigDto>(EMPTY_CONFIG)
   const [draft, setDraft] = useState<DhtRadarConfigDto>(EMPTY_CONFIG)
@@ -126,7 +134,7 @@ export function RadarPage() {
       setConfig(next); setDraft(next)
       toast.key(next.enabled ? 'dhtRadarStarted' : 'dhtRadarStoppedNotice', 'success')
       await refresh()
-    } catch (error) { toastRpcError(error) }
+    } catch (error) { toastActionError(error) }
   })
 
   const saveConfig = () => void runBusy(async () => {
@@ -138,7 +146,7 @@ export function RadarPage() {
       setConfig(next); setDraft(next); setShowConfig(false)
       toast.success(t('queueSaveAction'))
       await refresh()
-    } catch (error) { toastRpcError(error) }
+    } catch (error) { toastActionError(error) }
   })
 
   const clearSaved = () => void runBusy(async () => {
@@ -154,21 +162,24 @@ export function RadarPage() {
       await rpc.daemon.dhtRadar.clear()
       toast.success(t('dhtRadarCleared'))
       setClearArmed(false); setOffset(0); await refresh()
-    } catch (error) { toastRpcError(error) }
+    } catch (error) { toastActionError(error) }
   })
 
   const exportSaved = () => void runBusy(async () => {
     try {
       const result = await rpc.daemon.dhtRadar.export()
       if (result.count === 0) { toast.info(t('dhtRadarExportEmpty')); return }
-      const url = URL.createObjectURL(new Blob([result.text], { type: 'application/json' }))
+      const url = URL.createObjectURL(new Blob([result.text], { type: 'application/json;charset=utf-8' }))
       const anchor = document.createElement('a')
       anchor.href = url
       anchor.download = `fluxdown-dht-radar-${new Date().toISOString().slice(0, 10)}.json`
+      // Firefox / Safari 会在 detached <a> 或过早 revoke 时直接放弃下载。
+      document.body.append(anchor)
       anchor.click()
-      URL.revokeObjectURL(url)
+      anchor.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
       toast.success(t('dhtRadarExported', { n: result.count }))
-    } catch (error) { toastRpcError(error) }
+    } catch (error) { toastActionError(error) }
   })
 
   const importFile = (event: ChangeEvent<HTMLInputElement>) => {
@@ -180,7 +191,7 @@ export function RadarPage() {
         const result = await rpc.daemon.dhtRadar.import({ text: await file.text() })
         toast.success(t('dhtRadarImported', { imported: result.imported, skipped: result.skipped, invalid: result.invalid }))
         setOffset(0); await refresh()
-      } catch (error) { toastRpcError(error) }
+      } catch (error) { toastActionError(error) }
     })
   }
 
@@ -294,10 +305,10 @@ export function RadarPage() {
           </label>
           <div className="flex items-center gap-1">
             <Tooltip content={t('dhtRadarExport')}>
-              <Button variant="ghost" iconOnly icon={ArrowDownToLine} aria-label={t('dhtRadarExport')} disabled={busy} onClick={exportSaved} />
+              <Button variant="ghost" iconOnly icon={FileDown} aria-label={t('dhtRadarExport')} disabled={busy} onClick={exportSaved} />
             </Tooltip>
             <Tooltip content={t('dhtRadarImport')}>
-              <Button variant="ghost" iconOnly icon={Clipboard} aria-label={t('dhtRadarImport')} disabled={busy} onClick={() => fileRef.current?.click()} />
+              <Button variant="ghost" iconOnly icon={FileUp} aria-label={t('dhtRadarImport')} disabled={busy} onClick={() => fileRef.current?.click()} />
             </Tooltip>
             <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" onChange={importFile} />
             <Tooltip content={t('dhtRadarClear')}>
