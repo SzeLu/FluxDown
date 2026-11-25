@@ -18,6 +18,8 @@
 #   VERSION                产物版本（默认取 cargo metadata 的 fluxdown_ui_app.version；release 传 tag 版本，可带 -rc.N）
 #   ARTIFACT_PREFIX        产物名前缀（默认 FluxDown-GPUI-$VERSION-macos-<suffix>；release 传
 #                          FluxDown-$VERSION-macos-<x64|arm64>），生成 <prefix>.dmg 与 <prefix>.tar.gz
+#   FORMATS                只出部分产物：dmg / tar（逗号或空格分隔）；缺省 "dmg tar"。
+#                          不含 dmg 时跳过公证（notarytool 需要 DMG 载体）并给出提示。
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -28,6 +30,26 @@ OUT_DIR=${OUT_DIR:-"$REPO/build/gpui-macos"}
 HOST_ID=com.fluxdown.app
 HELPER_ID="$HOST_ID.agent"
 HELPER_NAME=FluxDownAgent.app
+
+FORMATS=${FORMATS:-"dmg tar"}
+FORMAT_LIST=" $(printf '%s' "$FORMATS" | tr ',[:space:]' '  ') "
+format_enabled() {
+  local alias a
+  case "$FORMAT_LIST" in *" all "*) return 0 ;; esac
+  case "$1" in
+    dmg) alias='dmg diskimage' ;;
+    tar) alias='tar tar.gz targz tgz' ;;
+    *) alias="$1" ;;
+  esac
+  for a in $alias; do
+    case "$FORMAT_LIST" in *" $a "*) return 0 ;; esac
+  done
+  return 1
+}
+if ! format_enabled dmg && ! format_enabled tar; then
+  echo "FORMATS 未选中任何已知格式：$FORMATS（可选 dmg / tar）" >&2
+  exit 2
+fi
 # GPUI 上游最低支持 10.15.7；Apple Silicon 由系统限定为 11.0 起。
 MIN_X86=10.15.7
 MIN_ARM=11.0
@@ -258,14 +280,16 @@ codesign --verify --deep --strict --verbose=2 "$APP"
 # ── DMG ──
 PREFIX=${ARTIFACT_PREFIX:-"FluxDown-GPUI-$VERSION-macos-$SUFFIX"}
 DMG="$OUT_DIR/$PREFIX.dmg"
+if format_enabled dmg; then
 rm -f "$DMG"
 ln -s /Applications "$WORK/dmg_src/Applications"
 hdiutil create -quiet -volname "FluxDown $VERSION" -srcfolder "$WORK/dmg_src" -ov -format UDZO "$DMG"
 [ "$IDENTITY" != - ] && retry codesign --force --timestamp ${KC:+--keychain "$KC"} -s "$IDENTITY" "$DMG"
+fi
 
 # ── 公证 ──
 stapler_retry() { retry xcrun stapler "$@"; }
-if [ -n "${APPLE_API_KEY_PATH:-}" ]; then
+if format_enabled dmg && [ -n "${APPLE_API_KEY_PATH:-}" ]; then
   [ "$IDENTITY" != - ] || { echo "notarization requires Developer ID signing" >&2; exit 1; }
   echo "== notarize"
   NOTARY=(--key "$APPLE_API_KEY_PATH" --key-id "${APPLE_API_KEY_ID:?}" --issuer "${APPLE_API_ISSUER_ID:?}")
@@ -291,12 +315,19 @@ if [ -n "${APPLE_API_KEY_PATH:-}" ]; then
   # DMG 的公证票据覆盖其中 .app 的 cdhash：再给 .app 本体 staple，便携 tar.gz 离线也能过 Gatekeeper
   stapler_retry staple "$APP"
   spctl -a -t exec -vv "$APP"
+elif [ -n "${APPLE_API_KEY_PATH:-}" ]; then
+  echo "!! FORMATS 不含 dmg：跳过公证（notarytool 需要 DMG 载体）；如需公证请同时构建 dmg" >&2
 fi
 
 # ── 便携 tar.gz（自动更新的 DMG 缺失回退；解压得 <prefix>/FluxDown.app）──
+if format_enabled tar; then
 rm -rf "${WORK:?}/$PREFIX"
 mkdir -p "$WORK/$PREFIX"
 ditto "$APP" "$WORK/$PREFIX/FluxDown.app"
 tar -C "$WORK" -czf "$OUT_DIR/$PREFIX.tar.gz" "$PREFIX"
+fi
 
-echo "DONE $DMG"
+DONE=()
+if format_enabled dmg; then DONE+=("$DMG"); fi
+if format_enabled tar; then DONE+=("$OUT_DIR/$PREFIX.tar.gz"); fi
+echo "DONE ${DONE[*]}"

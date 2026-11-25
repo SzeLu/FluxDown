@@ -11,8 +11,9 @@
 # 其它包名（AUR 等）只提示经包管理器更新（native/agent/src/update/install/detect.rs 的 OFFICIAL_PACKAGE）。
 #
 # 用法：VERSION=0.5.0 BIN_DIR=target/x86_64-unknown-linux-gnu/release OUT_DIR=build/installer \
-#       scripts/package_gpui_linux.sh
+#       [FORMATS=tar,appimage,deb,arch] scripts/package_gpui_linux.sh
 # 依赖：dpkg-deb、zstd、tar；APPIMAGETOOL 指向 appimagetool（缺省在 PATH 中找 appimagetool）。
+# FORMATS 可只出部分产物（tar / appimage / deb / arch，逗号或空格分隔）；缺省全部。
 set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -24,6 +25,28 @@ BINS=(fluxdown-desktop fluxdown-agent fluxdownd fluxdown_nmh)
 DESKTOP_FILE="$REPO/packaging/linux/com.fluxdown.app.desktop"
 ICON="$REPO/assets/logo/fluxdown_logo.png"
 BASE="FluxDown-${VERSION}-linux-x64"
+
+FORMATS=${FORMATS:-"tar appimage deb arch"}
+FORMAT_LIST=" $(printf '%s' "$FORMATS" | tr ',[:space:]' '  ') "
+format_enabled() {
+  local alias a
+  case "$FORMAT_LIST" in *" all "*) return 0 ;; esac
+  case "$1" in
+    tar) alias='tar tar.gz targz tgz' ;;
+    appimage) alias='appimage' ;;
+    deb) alias='deb debian' ;;
+    arch) alias='arch archlinux pkg pkg.tar.zst' ;;
+    *) alias="$1" ;;
+  esac
+  for a in $alias; do
+    case "$FORMAT_LIST" in *" $a "*) return 0 ;; esac
+  done
+  return 1
+}
+if ! format_enabled tar && ! format_enabled appimage && ! format_enabled deb && ! format_enabled arch; then
+  echo "FORMATS 未选中任何已知格式：$FORMATS（可选 tar / appimage / deb / arch）" >&2
+  exit 2
+fi
 
 mkdir -p "$OUT_DIR"
 OUT_DIR=$(cd "$OUT_DIR" && pwd)
@@ -39,6 +62,7 @@ stage_bins() {
 }
 
 # ── tar.gz（解压得 FluxDown-<ver>-linux-x64/）──
+if format_enabled tar; then
 # flux_down：Flutter 自动更新器覆盖安装后固定重启 <dir>/flux_down（native/fluxdown_updater），
 # 由它转交 fluxdown-desktop，保证从 Flutter 便携版升级后能直接拉起 GPUI。
 TAR_DIR="$WORK/$BASE"
@@ -51,8 +75,10 @@ chmod 0755 "$TAR_DIR/flux_down"
 install -m 0644 "$DESKTOP_FILE" "$TAR_DIR/com.fluxdown.app.desktop"
 install -m 0644 "$ICON" "$TAR_DIR/com.fluxdown.app.png"
 tar -C "$WORK" --owner=0 --group=0 -czf "$OUT_DIR/$BASE.tar.gz" "$BASE"
+fi
 
 # ── AppImage ──
+if format_enabled appimage; then
 # AppRun 要点：
 # - `--autostart` 直接交给 agent：agent 在 AppImage 内把自启条目写成 "$APPIMAGE" --autostart
 #   （native/agent/src/platform/mod.rs::agent_executable），登录时由这里转交。
@@ -83,6 +109,7 @@ exit "$status"
 EOF
 chmod 0755 "$APPDIR/AppRun"
 ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$APPIMAGETOOL" "$APPDIR" "$OUT_DIR/$BASE.AppImage"
+fi
 
 # ── deb / Arch 共用的文件系统布局 ──
 # /opt/fluxdown/<bins>、/usr/bin 符号链接（Linux current_exe 解析真实路径，兄弟查找不受影响）、
@@ -110,6 +137,7 @@ FWD
 }
 
 # ── deb ──
+if format_enabled deb; then
 # dpkg 以 '~' 表示预发布（0.5.0~rc.2 < 0.5.0）；'-' 会被当成 Debian revision 而排在正式版之后。
 DEB_VERSION=${VERSION/-/'~'}
 DEB="$WORK/deb"
@@ -140,8 +168,10 @@ gtk-update-icon-cache -q /usr/share/icons/hicolor/ 2>/dev/null || true
 EOF
 chmod 0755 "$DEB/DEBIAN/postinst"
 dpkg-deb --build --root-owner-group "$DEB" "$OUT_DIR/$BASE.deb"
+fi
 
 # ── Arch（.PKGINFO 须列在首位）──
+if format_enabled arch; then
 ARCHPKG="$WORK/arch"
 stage_root "$ARCHPKG"
 INSTALLED_BYTES=$(du -sb "$ARCHPKG/opt" "$ARCHPKG/usr" | awk '{s+=$1} END {print s}')
@@ -163,5 +193,6 @@ INSTALLED_BYTES=$(du -sb "$ARCHPKG/opt" "$ARCHPKG/usr" | awk '{s+=$1} END {print
   echo "optdepend = xdg-utils: file and URL associations"
 } >"$ARCHPKG/.PKGINFO"
 (cd "$ARCHPKG" && tar --zstd --owner=0 --group=0 -cf "$OUT_DIR/$BASE.pkg.tar.zst" .PKGINFO opt usr)
+fi
 
 ls -la "$OUT_DIR"
