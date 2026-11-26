@@ -372,16 +372,27 @@ impl DhtRadarView {
         self.notice = None;
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
-            let path = match receiver.await {
-                Ok(Ok(Some(path))) => path,
-                _ => {
-                    // 用户取消：恢复按钮，不报错。
-                    drop(this.update_in(cx, |this, _, cx| {
-                        this.busy = false;
-                        cx.notify();
-                    }));
-                    return;
+            // 区分「用户主动取消」与「系统文件对话框打不开」：后者必须给出提示，
+            // 否则点击导出后既不弹窗也不报错，看起来就像按钮没响应。
+            let (path, prompt_error) = match receiver.await {
+                Ok(Ok(Some(path))) => (Some(path), None),
+                Ok(Ok(None)) => (None, None),
+                Ok(Err(error)) => (None, Some(format!("{error:#}"))),
+                Err(error) => (None, Some(error.to_string())),
+            };
+            let Some(path) = path else {
+                let failed = prompt_error.is_some();
+                drop(this.update_in(cx, |this, _, cx| {
+                    this.busy = false;
+                    if failed {
+                        this.notice = Some(this.t("dhtRadarExportFailed"));
+                    }
+                    cx.notify();
+                }));
+                if let Some(error) = prompt_error {
+                    log::warn!("dht radar export path prompt failed: {error}");
                 }
+                return;
             };
             // 旧的后台服务不认识新方法（应用更新后没完全退出重开）时，给出可操作的提示。
             let mut stale_service = false;
@@ -448,16 +459,24 @@ impl DhtRadarView {
         self.notice = None;
         cx.notify();
         cx.spawn_in(window, async move |this, cx| {
-            let path = match receiver.await {
-                Ok(Ok(Some(mut paths))) => paths.pop(),
-                _ => None,
+            // 与导出同理：对话框失败不能当成用户取消，否则按钮看起来毫无反应。
+            let (mut paths, prompt_error) = match receiver.await {
+                Ok(Ok(paths)) => (paths.unwrap_or_default(), None),
+                Ok(Err(error)) => (Vec::new(), Some(format!("{error:#}"))),
+                Err(error) => (Vec::new(), Some(error.to_string())),
             };
-            let Some(path) = path else {
-                // 用户取消：恢复按钮，不报错。
+            let Some(path) = paths.pop() else {
+                let failed = prompt_error.is_some();
                 drop(this.update_in(cx, |this, _, cx| {
                     this.busy = false;
+                    if failed {
+                        this.notice = Some(this.t("dhtRadarImportFailed"));
+                    }
                     cx.notify();
                 }));
+                if let Some(error) = prompt_error {
+                    log::warn!("dht radar import path prompt failed: {error}");
+                }
                 return;
             };
             let text = cx

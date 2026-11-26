@@ -305,7 +305,7 @@ export function RadarPage() {
           </label>
           <div className="flex items-center gap-1">
             <Tooltip content={t('dhtRadarExport')}>
-              <Button variant="ghost" iconOnly icon={FileDown} aria-label={t('dhtRadarExport')} disabled={busy} onClick={exportSaved} />
+              <Button variant="ghost" iconOnly icon={FileDown} aria-label={t('dhtRadarExport')} loading={busy} onClick={exportSaved} />
             </Tooltip>
             <Tooltip content={t('dhtRadarImport')}>
               <Button variant="ghost" iconOnly icon={FileUp} aria-label={t('dhtRadarImport')} disabled={busy} onClick={() => fileRef.current?.click()} />
