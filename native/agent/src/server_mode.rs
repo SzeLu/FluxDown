@@ -935,6 +935,9 @@ pub fn router(handle: Arc<ServerHandle>) -> Router {
     let demo = handle.demo;
     let mut router = Router::new()
         .route("/api/v1/setup/status", get(setup_status))
+        // 轻量鉴权探针：Web 登录在 WS 升级失败时用它区分「密钥错误 / 待初始化 / 网络问题」。
+        // 必须在 server 模式恒定注册（兼容 API 的 management 组可关，曾让 Web 探测 404 后误判）。
+        .route("/api/v1/access/probe", get(access_probe))
         .route(
             "/api/v1/setup",
             post(setup_submit).layer(DefaultBodyLimit::max(SETUP_BODY_LIMIT)),
