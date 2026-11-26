@@ -132,12 +132,24 @@ impl DaemonService {
                 to_value(DhtRadarClearDto { removed })
             }
             method::DAEMON_DHT_RADAR_EXPORT => {
-                let rows = self.db.all_dht_radar_torrents().await.map_err(|error| {
-                    internal_error(format!("load dht radar saved rows failed: {error}"))
-                })?;
-                let text = encode_export(&rows, fluxdown_engine::dht_radar::now_unix()).map_err(
-                    |error| internal_error(format!("encode dht radar export failed: {error}")),
-                )?;
+                let rows = match self.db.all_dht_radar_torrents().await {
+                    Ok(rows) => rows,
+                    Err(error) => {
+                        tracing::error!(error = %error, "dht radar export: load saved rows failed");
+                        return Err(internal_error(format!(
+                            "load dht radar saved rows failed: {error}"
+                        )));
+                    }
+                };
+                let text = match encode_export(&rows, fluxdown_engine::dht_radar::now_unix()) {
+                    Ok(text) => text,
+                    Err(error) => {
+                        tracing::error!(error = %error, "dht radar export: encode failed");
+                        return Err(internal_error(format!(
+                            "encode dht radar export failed: {error}"
+                        )));
+                    }
+                };
                 to_value(DhtRadarExportDto {
                     count: u64::try_from(rows.len()).unwrap_or(u64::MAX),
                     text,

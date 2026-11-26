@@ -390,10 +390,11 @@ impl DhtRadarView {
                     cx.notify();
                 }));
                 if let Some(error) = prompt_error {
-                    log::warn!("dht radar export path prompt failed: {error}");
+                    log::warn!("dht radar export aborted: save dialog failed: {error:#}");
                 }
                 return;
             };
+            log::info!("dht radar export: save path selected, requesting daemon export");
             // 旧的后台服务不认识新方法（应用更新后没完全退出重开）时，给出可操作的提示。
             let mut stale_service = false;
             let written = match client
@@ -410,7 +411,10 @@ impl DhtRadarView {
                         .spawn(async move { std::fs::write(&path, text) })
                         .await
                     {
-                        Ok(()) => Some(count),
+                        Ok(()) => {
+                            log::info!("dht radar export: wrote {count} rows");
+                            Some(count)
+                        }
                         Err(error) => {
                             log::warn!(
                                 "dht radar export write failed: {error}; path: {path_display}"
@@ -419,10 +423,13 @@ impl DhtRadarView {
                         }
                     }
                 }
-                // 没有存档时也把选择的路径当成一次成功的空导出说清楚。
-                Ok(_) => Some(0),
+                Ok(dto) => {
+                    log::info!("dht radar export: daemon returned {} rows", dto.count);
+                    Some(0)
+                }
                 Err(error) => {
                     stale_service = error.code == ApplicationErrorCode::Unsupported;
+                    log::warn!("dht radar export: daemon RPC failed: {error:?}");
                     None
                 }
             };
