@@ -992,6 +992,29 @@ async fn setup_status(State(handle): State<Arc<ServerHandle>>) -> Response {
     )
 }
 
+/// Web 登录的轻量鉴权探针：恒定注册，不随 `/api/v1/info` 所在的兼容 API management 分组开关消失。
+/// 返回 200（凭据有效）/ 401（密钥错误）/ 403（尚未初始化），让 WS 升级失败时前端能区分这三种情况。
+/// 与文件下载不同，这里不接受 `?token=`：浏览器 fetch 一律用 `Authorization: Bearer`。
+async fn access_probe(
+    State(handle): State<Arc<ServerHandle>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+) -> Response {
+    if !handle.wait_ready().await {
+        return starting_response();
+    }
+    if handle.token.get().is_empty() {
+        return json_response(
+            StatusCode::FORBIDDEN,
+            serde_json::json!({ "error": "setup required" }),
+        );
+    }
+    if let Err(status) = handle.browser_authorized(addr.ip(), &headers, None).await {
+        return status.into_response();
+    }
+    json_response(StatusCode::OK, serde_json::json!({ "ok": true }))
+}
+
 #[derive(Deserialize)]
 struct SetupBody {
     token: String,
@@ -1917,6 +1940,49 @@ mod tests {
         assert_eq!(pending.await.unwrap(), 200);
         drop(client);
         harness.finish().await;
+    }
+
+    #[tokio::test]
+    async fn access_probe_distinguishes_valid_invalid_and_uninitialized_keys() {
+        let mut harness = Harness::new("probe", "flux2026").await;
+        let base = harness.serve().await;
+        let client = reqwest::Client::new();
+        let url = format!("{base}/api/v1/access/probe");
+        assert_eq!(
+            client
+                .get(&url)
+                .bearer_auth("flux2026")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            client
+                .get(&url)
+                .bearer_auth("wrong2026")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        harness.finish().await;
+
+        let mut setup = Harness::new("probe_setup", "").await;
+        let base = setup.serve().await;
+        assert_eq!(
+            reqwest::Client::new()
+                .get(format!("{base}/api/v1/access/probe"))
+                .bearer_auth("flux2026")
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        setup.finish().await;
     }
 
     #[tokio::test]

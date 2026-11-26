@@ -56,14 +56,15 @@ export async function fetchPing(signal?: AbortSignal): Promise<PingInfo | null> 
 }
 
 /**
- * 用访问密钥探测一个鉴权 HTTP 接口，用于把 WS 升级前的失败（浏览器拿不到 HTTP 状态）
- * 区分为「密钥错误」「服务需要初始化」「网络/其他」。
+ * 用访问密钥探测恒注册的 `/api/v1/access/probe`，用于把 WS 升级前的失败（浏览器拿不到 HTTP
+ * 状态）区分为「密钥错误」「服务需要初始化」「网络/其他」。不能用 `/api/v1/info`：它属于
+ * 可关闭的兼容 API management 分组，关掉后探测拿到 404，会误判成密钥错误。
  */
 export type TokenProbe = 'ok' | 'unauthorized' | 'setupRequired' | 'unreachable' | 'unknown'
 
 export async function probeToken(token: string, signal?: AbortSignal): Promise<TokenProbe> {
   try {
-    const res = await fetch('/api/v1/info', {
+    const res = await fetch('/api/v1/access/probe', {
       headers: { Authorization: `Bearer ${token}` },
       signal,
       cache: 'no-store',

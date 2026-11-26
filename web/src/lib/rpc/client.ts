@@ -10,7 +10,7 @@
 // - 事件帧按时间片成批应用（见 `FRAME_BATCH_MS`）；
 // - 关闭原因 `service-quit`：不再重连；
 // - 其他断线：指数退避重连，网络恢复/页面回到前台立即重试；
-// - 升级前失败（浏览器拿不到 HTTP 状态）：探测 `/api/v1/info` 区分密钥无效 / 需初始化 / 网络问题。
+// - 升级前失败（浏览器拿不到 HTTP 状态）：探测 `/api/v1/access/probe` 区分密钥无效 / 需初始化 / 网络问题。
 
 import { applyAgentEvents, installQueue, installTasks, serviceEventReloadsTables, tablesLoading } from './apply'
 import { judgeFrame, type EventCursor } from './cursor'
